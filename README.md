@@ -1,4 +1,4 @@
-# 🏨 五星级酒店客房服务 Agent — Hotel Room Service AI Agent
+# 🏨 酒店客房服务 Agent — Hotel Room Service AI Agent
 
 <p align="center">
   <strong>基于 LangGraph + DeepSeek 的智能客房服务对话系统</strong><br>
@@ -17,7 +17,7 @@
 
 ## 📖 项目简介 | Overview
 
-一个面向五星级酒店的 **AI 客房服务 Agent**，客人通过自然语言提出需求（送物品、打扫、报修、洗衣、叫醒、呼叫前台），Agent 自动理解意图、校验参数、风控确认、执行操作，并返回结构化结果。
+一个面向酒店的 **AI 客房服务 Agent**，客人通过自然语言提出需求（送物品、打扫、报修、洗衣、叫醒、呼叫前台），Agent 自动理解意图、校验参数、风控确认、执行操作，并返回结构化结果。
 
 **核心能力**：理解中文口语 → 识别 6 种客房意图 → 12 节点流水线校验 → 调用 8 个工具函数 → 返回结构化 JSON
 
