@@ -1,0 +1,1063 @@
+\documentclass[12pt,a4paper]{ctexart}
+\usepackage{geometry}
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+
+\title{\Huge \textbf{基于大模型的酒店客房服务智能体系统}\\ \Large 客房服务Agent — BRD对齐项目大纲}
+\author{客房服务Agent小组}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ==========================================
+\section{项目现状总览}
+% ==========================================
+
+\subsection{我们做了什么}
+
+截至目前，客房服务Agent已有一个可运行的原型（MVP），核心组件如下：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{组件} & \textbf{技术选型} & \textbf{状态} \\
+\midrule
+大模型 & Qwen2.5:7B (Ollama 本地部署) & ✅ 已就绪 \\
+AI框架 & LangGraph (图编排 + Tool Calling) & ✅ 已就绪 \\
+知识库 & Chroma + all-MiniLM-L6-v2 (RAG) & ✅ 已就绪 \\
+会话记忆 & MemorySaver (按房间号隔离) & ✅ 已就绪 \\
+服务接口 & FastAPI (REST API) & ✅ 已就绪 \\
+测试界面 & Gradio (ChatInterface) & ✅ 已就绪 \\
+主路由 & LLM意图分类 → 5路Agent分发 & ✅ 已就绪 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{6个已实现的工具函数}
+
+\begin{enumerate}
+    \item \texttt{order\_room\_service(room\_number, item, quantity)} — 客房送餐/饮品
+    \item \texttt{request\_cleaning(room\_number, time\_preference)} — 预约清扫
+    \item \texttt{request\_supplies(room\_number, item, quantity)} — 补充消耗品
+    \item \texttt{report\_maintenance(room\_number, issue, urgency)} — 设备报修
+    \item \texttt{request\_laundry(room\_number, items, pickup\_time)} — 洗衣服务
+    \item \texttt{set\_wake\_up\_call(room\_number, time)} — 叫醒服务
+\end{enumerate}
+
+\subsection{当前架构图}
+
+原型采用 LangGraph 构建的流水线图，节点依次为：内容安全护栏 → RAG知识检索 → LLM对话（含工具调用）→ 回复。
+
+\subsection{BRD对齐度评估}
+
+根据2026-06-09的差距分析，当前代码对BRD的对齐度为约\textbf{30\%}。以下为关键差距：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}p{3cm}p{3cm}p{7cm}@{}}
+\toprule
+\textbf{BRD要求} & \textbf{当前状态} & \textbf{差距} \\
+\midrule
+配置表落地 & ❌ 缺失 & 6张配置表仅在文档中，代码未加载 \\
+槽位校验 & ❌ 缺失 & 未校验request\_type枚举、duration范围等 \\
+能力矩阵Gating & ❌ 缺失 & 未检查service设备是否支持当前intent \\
+风控红线 & ❌ 缺失 & 3个高风险intent直接执行，无二次确认 \\
+NeedClarify机制 & ❌ 缺失 & 缺槽/歧义时无结构化澄清输出 \\
+结构化输出 & ❌ 缺失 & 仅回文本，无result\_type/decision\_trace \\
+工具完整性 & ⚠️ 缺3个 & 缺delete\_alarm / close\_alarm / call\_hotel \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\newpage
+
+% ==========================================
+\section{业务需求总览（BRD摘要）}
+% ==========================================
+
+\subsection{客房服务Agent负责的4个意图}
+
+根据酒店BRD全表中的IntentDefinitions，客房服务Agent负责以下意图（其余意图分别属于控制Agent、咨询Agent、点餐Agent）：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llllp{3.5cm}@{}}
+\toprule
+\textbf{ID} & \textbf{Intent L1} & \textbf{L2} & \textbf{L3} & \textbf{Required Slots} \\
+\midrule
+SVC\_ROOM\_001 & ROOM\_SERVICE & CREATE\_REQUEST & DEFAULT & request\_type \\
+SVC\_HK\_001 & HOUSEKEEPING & CREATE\_REQUEST & DEFAULT & request\_type \\
+SVC\_CALL\_001 & HOTEL\_CALL & CREATE\_REQUEST & DEFAULT & request\_type \\
+ALARM\_001 & ALARM & SETTINGS & DEFAULT & time, duration \\
+ALARM\_002 & ALARM & DELETE & DEFAULT & label \\
+ALARM\_003 & ALARM & CLOSE & DEFAULT & alarm\_action \\
+\bottomrule
+\end{tabular}
+\caption{客房服务6条意图定义（来自IntentDefinitions.xlsx）}
+\end{table}
+
+\subsection{风险等级总览}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{5cm}@{}}
+\toprule
+\textbf{Intent L1} & \textbf{风险等级} & \textbf{后处理要求} \\
+\midrule
+HOUSEKEEPING & 🔴 高 & 必须二次确认；确认通过后才创建请求 \\
+HOTEL\_CALL & 🔴 高 & 必须二次确认 \\
+ROOM\_SERVICE & 🔴 高 & 必须二次确认；确认通过后才创建请求 \\
+ALARM & 🟡 中 & delete/close必须二次确认；set可直接执行 \\
+\bottomrule
+\end{tabular}
+\caption{客房服务意图风险等级（来自BRD §7）}
+\end{table}
+
+\subsection{核心槽位定义}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lllll@{}}
+\toprule
+\textbf{Slot} & \textbf{Min} & \textbf{Max} & \textbf{Enum} & \textbf{用于} \\
+\midrule
+request\_type & — & — & room\_service, housekeeping, hotel\_call, workorder, amenity, other & 三个服务intent \\
+priority & — & — & low, normal, high, urgent & 三个服务intent \\
+alarm\_action & — & — & set, delete, close & ALARM \\
+time & — & — & — & ALARM \\
+duration & 1.0 & 10080.0 & — & ALARM \\
+details & — & — & — & 三个服务intent \\
+location & — & — & — & 房间号 \\
+\bottomrule
+\end{tabular}
+\caption{客房服务核心槽位（来自SlotDefinitions.xlsx）}
+\end{table}
+
+\newpage
+
+% ==========================================
+\section{目标架构：BRD对齐后的完整流水线}
+% ==========================================
+
+改造后，LangGraph图中的节点将扩展为以下10个节点：
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{顺序} & \textbf{节点} \\
+\midrule
+1 & content\_safety\_filter (内容安全护栏) \\
+2 & locale\_resolver (语言检测与回退) \\
+3 & rag\_retrieve (知识库检索) \\
+4 & chatbot (LLM意图识别+槽位提取，结构化JSON输出) \\
+5 & slot\_validator (槽位enum/range/required校验) \\
+6 & entity\_resolver (实体标准化与歧义检测) \\
+7 & capability\_gate (能力矩阵检查) \\
+8 & risk\_checker (风控红线 GR-01$\sim$10) \\
+9 & tools / execute (工具调用执行) \\
+10 & response\_formatter + decision\_trace (标准化输出) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{每个节点都从BRD配置表中读取校验规则}，确保所有决策可追溯。
+
+\subsection{标准化输出格式}
+
+系统最终输出统一为以下JSON结构：
+
+\begin{verbatim}
+{
+  "final_intent":   { "L1": "HOUSEKEEPING", "L2": "CREATE_REQUEST",
+                      "L3": "DEFAULT", "ID": "SVC_HK_001" },
+  "final_slots":    { "request_type": "housekeeping", "location": "301",
+                      "priority": "normal", "details": "现在打扫" },
+  "resolved_entities": { "room": "301" },
+  "result_type":    "execute",
+  "decision_trace": [
+    { "step": "slot_validator", "result": "pass", "details": "..." },
+    { "step": "capability_gate", "result": "pass" },
+    { "step": "risk_checker", "result": "risky", "action": "confirm" }
+  ]
+}
+\end{verbatim}
+
+其中 \texttt{result\_type} 为三元枚举：
+\begin{itemize}
+    \item \texttt{"execute"} — 校验全部通过，可执行
+    \item \texttt{"need\_clarify"} — 缺槽/歧义/风险待确认，需追问
+    \item \texttt{"reject"} — 超出能力范围，礼貌拒绝
+\end{itemize}
+
+\newpage
+
+% ==========================================
+\section{三阶段实施计划}
+% ==========================================
+
+\subsection{🔴 第一阶段：配置落地 + 输出标准化（预计8.5小时）}
+
+\textbf{目标}：让代码"读懂BRD"，结束纯自由文本回复，输出标准化JSON。
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{\#} & \textbf{任务} & \textbf{产出} \\
+\midrule
+P0.1 & 新建 \texttt{config/} 目录 & 6张BRD配置表JSON化：general.json、intent\_definitions.json、slot\_definitions.json、capability\_matrix.json、risk\_control.json \\
+P0.2 & 新建 \texttt{models.py} & 数据模型：IntentCandidate、Slot、DecisionTrace、NeedClarify、FinalOutput \\
+P0.3 & 重写 system\_prompt.txt & 注入6条intent定义+required/optional槽位，要求LLM输出结构化JSON \\
+P0.4 & 改造 chatbot\_node & LLM输出从自然语言改为结构化JSON \{intents, slots, entities\} \\
+P0.5 & 新建 response\_formatter.py & 标准化输出 \{result\_type, final\_intent, ..., decision\_trace\} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{🟡 第二阶段：校验链路（预计10小时）}
+
+\textbf{目标}：新增5个校验节点，让系统自动拒绝不合规请求。
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{\#} & \textbf{任务} & \textbf{产出} \\
+\midrule
+P1.1 & slot\_validator 节点 & request\_type枚举校验、duration范围[1,10080]、required槽位检查 \\
+P1.2 & capability\_gate 节点 & 查capability\_matrix.json，block不支持的intent \\
+P1.3 & risk\_checker 节点 & intent级风险红线 + 全局GR-01$\sim$10检查 \\
+P1.4 & clarify\_builder 模块 & 14个reason\_code枚举 + candidates标准结构 + clarify\_slot \\
+P1.5 & 改造 build\_graph() & 将5个新节点插入现有LangGraph图 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{🟢 第三阶段：工具对齐 + 测试（预计9小时）}
+
+\textbf{目标}：补齐缺失工具，通过AC1-AC5验收测试。
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{\#} & \textbf{任务} & \textbf{产出} \\
+\midrule
+P2.1 & 改造全部工具函数 & 加request\_type参数，返回结构化trace \\
+P2.2 & 新增3个缺失工具 & delete\_alarm(ALARM\_002) / close\_alarm(ALARM\_003) / call\_hotel(HOTEL\_CALL) \\
+P2.3 & locale\_resolver + entity\_resolver & locale检测回退 + 实体标准化歧义检测 \\
+P2.4 & 验收测试 & AC1$\sim$AC5测试用例：枚举闭环/能力Gating/槽位clamp/required槽澄清/实体可追溯 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{总时间线}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{阶段} & \textbf{工时} & \textbf{产出状态} \\
+\midrule
+🔴 第一阶段 & $\sim$8.5h & 配置表就绪 + 结构化输出 \\
+🟡 第二阶段 & $\sim$10h & 校验链路完整 \\
+🟢 第三阶段 & $\sim$9h & 工具完整 + 验收通过 \\
+\midrule
+\textbf{总计} & \textbf{$\sim$27.5h} & \textbf{BRD完全对齐} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\newpage
+
+% ==========================================
+\section{技术栈与工具链}
+% ==========================================
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{层级} & \textbf{技术} & \textbf{用途} \\
+\midrule
+编程语言 & Python 3.12 & 全部后端逻辑 \\
+本地模型 & Ollama + Qwen2.5:7B & 意图识别与槽位提取 \\
+AI框架 & LangGraph + LangChain & 图编排、Tool Calling、会话记忆 \\
+向量数据库 & Chroma & RAG知识检索 \\
+Embedding & all-MiniLM-L6-v2 & 文本向量化 \\
+服务框架 & FastAPI + Uvicorn & REST API服务 \\
+测试界面 & Gradio & 交互式调试 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{验收标准（BRD AC1-AC5）}
+
+\begin{enumerate}[label=\textbf{AC\arabic*}:, leftmargin=*]
+    \item \textbf{枚举值闭环}：输出枚举值全部在General/Slot enum内，否则必须回退/澄清/拒绝且trace可定位。
+    \item \textbf{能力矩阵严格生效}：不支持的intent\_L1不得execute。
+    \item \textbf{槽位范围与clamp生效}：duration越界自动clamp到[1, 10080]，并在trace标识。
+    \item \textbf{缺失required槽位必进入need\_clarify}：给出reason\_code + clarify\_slot + candidates。
+    \item \textbf{实体/动作命中可追溯}：trace包含命中variants、来源词表、canonical。
+\end{enumerate}
+
+\newpage
+
+% ==========================================
+\section{文件结构总览}
+% ==========================================
+
+改造完成后的完整文件结构：
+
+\begin{verbatim}
+llm/
+  |-- config/                         <-- 新建：BRD配置表JSON化
+  |   |-- general.json                <-- language/device_type/location/scope
+  |   |-- intent_definitions.json     <-- 6条客房服务intent
+  |   |-- slot_definitions.json       <-- 11个客房服务槽位
+  |   |-- capability_matrix.json      <-- service能力矩阵
+  |   +-- risk_control.json           <-- intent级风险 + GR-01~10
+  |-- models.py                       <-- 新建：全部数据模型
+  |-- room_service_agent.py           <-- 改造：核心图 + 新节点
+  |-- slot_validator.py               <-- 新建：槽位校验
+  |-- capability_gate.py              <-- 新建：能力Gating
+  |-- risk_checker.py                 <-- 新建：风控红线
+  |-- clarify_builder.py              <-- 新建：NeedClarify构建
+  |-- response_formatter.py           <-- 新建：标准化输出 + trace
+  |-- locale_resolver.py              <-- 新建：locale检测
+  |-- entity_resolver.py              <-- 新建：实体解析
+  |-- tools_api/
+  |   +-- mock_services.py            <-- 改造：加request_type + trace返回
+  |-- prompts/
+  |   +-- system_prompt.txt           <-- 重写：注入intent/slot定义
+  |-- knowledge/
+  |   +-- placeholder_info.txt        <-- 保留：酒店知识库
+  |-- main_router.py                  <-- 保留：5路分发路由
+  |-- server.py                       <-- 改造：结构化输出模型
+  +-- tests/
+      +-- test_room_service.py        <-- 新建：AC1~AC5验收测试
+\end{verbatim}
+
+\newpage
+
+% ==========================================
+\section{手把手实操指南：从现状到BRD对齐}
+% ==========================================
+
+以下按\textbf{每天可完成的粒度}拆解，每一步都标注了：创建/修改哪个文件、放什么内容、为什么（对应哪条BRD）、如何自测。
+
+\subsection*{图例说明}
+\begin{itemize}
+    \item \fbox{新建} = 创建此前不存在的文件
+    \item \fbox{改造} = 修改已有文件
+    \item \fbox{保留} = 不动，照旧
+\end{itemize}
+
+% ---------- DAY 1 ----------
+\subsection{Day 1：配置表落地（一）—— General + IntentDefinitions}
+
+\textbf{目标}：把BRD §8中客房服务相关的枚举和意图定义从文档搬到JSON文件，代码能加载。
+
+\subsubsection*{Step 1.1 — 新建 config/general.json}
+\begin{verbatim}
+路径: llm/config/general.json
+来源: BRD §8.1 General表（仅提取客房服务相关的枚举列）
+\end{verbatim}
+
+写入以下JSON结构：
+
+{\small
+\begin{verbatim}
+{
+  "language": {
+    "enum": ["zh-CN", "zh-GD", "en-US", "en-SG"],
+    "default": "zh-CN",
+    "description": { "zh-CN": "普通话", "zh-GD": "粤语",
+      "en-US": "美式英语", "en-SG": "新加坡英语" }
+  },
+  "device_type": {
+    "enum": ["light","rgbw_light","curtain","air_conditioner",
+      "television","speaker","service","alarm"],
+    "note": "service和alarm为BRD隐含类型，不在原General表中"
+  },
+  "location": {
+    "enum": ["living_room","bedroom","bathroom","balcony",
+      "whole_house","bedside","corridor","second_bedroom",
+      "kitchen","display_area","conference_room","study_room"]
+  }
+}
+\end{verbatim}
+}
+
+\textbf{为什么}：BRD §10.1 要求所有枚举字段必须命中General集合，否则need\_clarify/reject。\textbf{自测}：Python中\texttt{json.load(open("config/general.json"))}能正常读取。
+
+\subsubsection*{Step 1.2 — 新建 config/intent\_definitions.json}
+\begin{verbatim}
+路径: llm/config/intent_definitions.json
+来源: BRD §8.2 IntentDefinitions（仅6条客房服务相关的行）
+\end{verbatim}
+
+写入以下JSON（6条intent完整定义）：
+
+{\small
+\begin{verbatim}
+{
+  "intents": [
+    {
+      "id": "SVC_ROOM_001",
+      "L1": "ROOM_SERVICE", "L2": "CREATE_REQUEST", "L3": "DEFAULT",
+      "device_type": "service",
+      "required": ["request_type"],
+      "optional": ["details", "location", "priority"],
+      "description": "amenity request / ticket (客房补给/服务请求)",
+      "risk_level": "high"
+    },
+    {
+      "id": "SVC_HK_001",
+      "L1": "HOUSEKEEPING", "L2": "CREATE_REQUEST", "L3": "DEFAULT",
+      "device_type": "service",
+      "required": ["request_type"],
+      "optional": ["details", "location", "priority"],
+      "description": "housekeeping request / ticket (客房清洁/打扫)",
+      "risk_level": "high"
+    },
+    {
+      "id": "SVC_CALL_001",
+      "L1": "HOTEL_CALL", "L2": "CREATE_REQUEST", "L3": "DEFAULT",
+      "device_type": "service",
+      "required": ["request_type"],
+      "optional": ["details", "location", "priority"],
+      "description": "call hotel / connect operator (呼叫前台/人工)",
+      "risk_level": "high"
+    },
+    {
+      "id": "ALARM_001",
+      "L1": "ALARM", "L2": "SETTINGS", "L3": "DEFAULT",
+      "device_type": "alarm",
+      "required": ["time", "duration"],
+      "optional": ["label", "repeat"],
+      "description": "set alarm/timer (设定叫醒/闹钟)",
+      "risk_level": "medium"
+    },
+    {
+      "id": "ALARM_002",
+      "L1": "ALARM", "L2": "DELETE", "L3": "DEFAULT",
+      "device_type": "alarm",
+      "required": ["label"],
+      "optional": ["alarm_id"],
+      "description": "delete alarm/timer (删除闹钟)",
+      "risk_level": "medium",
+      "require_confirm": true
+    },
+    {
+      "id": "ALARM_003",
+      "L1": "ALARM", "L2": "CLOSE", "L3": "DEFAULT",
+      "device_type": "alarm",
+      "required": ["alarm_action"],
+      "optional": ["label"],
+      "description": "stop alarm/timer (关闭闹钟)",
+      "risk_level": "medium",
+      "require_confirm": true
+    }
+  ]
+}
+\end{verbatim}
+}
+
+\textbf{为什么}：BRD §9步骤3-5要求基于IntentDefinitions做候选意图整理和裁决。\textbf{自测}：Python中能按L1查询到对应intent的required slots列表。
+
+\newpage
+
+% ---------- DAY 2 ----------
+\subsection{Day 2：配置表落地（二）—— SlotDefinitions + CapabilityMatrix + RiskControl}
+
+\textbf{目标}：完成剩余3张配置表的JSON化，配置层全部就绪。
+
+\subsubsection*{Step 2.1 — 新建 config/slot\_definitions.json}
+\begin{verbatim}
+路径: llm/config/slot_definitions.json
+来源: BRD §8.3 SlotDefinitions（仅11个客房服务相关槽位）
+\end{verbatim}
+
+{\small
+\begin{verbatim}
+{
+  "slots": [
+    { "id": "SL_001", "name": "alarm_action",
+      "enum": ["set","delete","close"],
+      "note": "闹钟动作" },
+    { "id": "SL_002", "name": "alarm_id",
+      "note": "闹钟唯一标识，用于精确删除/关闭" },
+    { "id": "SL_015", "name": "details",
+      "note": "服务请求详情文本；可抽取item/quantity/故障类型" },
+    { "id": "SL_019", "name": "duration",
+      "min": 1.0, "max": 10080.0,
+      "note": "持续时间/延时（分钟）" },
+    { "id": "SL_026", "name": "label",
+      "note": "标签/名称（闹钟或请求备注）" },
+    { "id": "SL_027", "name": "language",
+      "enum": ["zh-CN","zh-GD","en-US","en-SG"],
+      "note": "语种/方言标识" },
+    { "id": "SL_028", "name": "location",
+      "note": "位置/区域，按上下文映射到房间枚举" },
+    { "id": "SL_034", "name": "priority",
+      "enum": ["low","normal","high","urgent"],
+      "default": "normal",
+      "note": "请求优先级" },
+    { "id": "SL_038", "name": "repeat",
+      "note": "重复规则：once/daily/weekdays/weekends等" },
+    { "id": "SL_039", "name": "request_type",
+      "enum": ["room_service","housekeeping","hotel_call",
+               "workorder","amenity","other"],
+      "note": "服务请求类型；与业务路由对应" },
+    { "id": "SL_046", "name": "time",
+      "note": "时间点 HH:MM，支持am/pm、口语'早上7点'" }
+  ]
+}
+\end{verbatim}
+}
+
+\subsubsection*{Step 2.2 — 新建 config/capability\_matrix.json}
+\begin{verbatim}
+路径: llm/config/capability_matrix.json
+来源: BRD §8.4 CapabilityMatrix（仅service和alarm行）
+\end{verbatim}
+
+{\small
+\begin{verbatim}
+{
+  "service": {
+    "supported_intents": [
+      "HOTEL_CALL", "HOUSEKEEPING", "ROOM_SERVICE",
+      "NEED_CLARIFY", "EXIT"
+    ],
+    "source_row": "CM_010"
+  },
+  "alarm": {
+    "supported_intents": ["ALARM"],
+    "source_row": "CM_013"
+  }
+}
+\end{verbatim}
+}
+
+\textbf{为什么}：BRD §10.2要求能力矩阵严格生效——不支持的intent不得execute。\textbf{自测}：查\texttt{capability\_matrix["service"]["supported\_intents"]}返回5个intent。
+
+\subsubsection*{Step 2.3 — 新建 config/risk\_control.json}
+\begin{verbatim}
+路径: llm/config/risk_control.json
+来源: BRD §7（intent级）+ §7.1（全局GR-01~10）
+注意：ALARM的device_type是alarm不是service（CM_013）
+\end{verbatim}
+
+{\small
+\begin{verbatim}
+{
+  "intent_risk": {
+    "HOUSEKEEPING": { "level": "high", "require_confirm": true },
+    "HOTEL_CALL":   { "level": "high", "require_confirm": true },
+    "ROOM_SERVICE": { "level": "high", "require_confirm": true },
+    "ALARM": { "level": "medium",
+      "confirm_actions": ["delete", "close"] }
+  },
+  "global_rules": [
+    { "id": "GR-01", "trigger": "ambiguous_entity",
+      "action": "need_clarify", "desc": "目标对象不明确" },
+    { "id": "GR-02", "trigger": "ambiguous_scope",
+      "action": "need_clarify", "desc": "范围不明确" },
+    { "id": "GR-03", "trigger": "irreversible_action",
+      "action": "risky_action_need_confirm",
+      "desc": "不可逆/高影响操作" },
+    { "id": "GR-04", "trigger": "capability_unsupported",
+      "action": "need_clarify", "desc": "能力不支持" },
+    { "id": "GR-05", "trigger": "invalid_enum",
+      "action": "need_clarify", "desc": "枚举非法" },
+    { "id": "GR-06", "trigger": "parse_time_failed",
+      "action": "need_clarify", "desc": "时间/时长解析失败" },
+    { "id": "GR-07", "trigger": "intent_conflict",
+      "action": "need_clarify", "desc": "规则冲突" },
+    { "id": "GR-08", "trigger": "device_unavailable",
+      "action": "need_clarify", "desc": "设备不可用" },
+    { "id": "GR-09", "trigger": "low_confidence",
+      "action": "need_clarify", "desc": "置信度不足" },
+    { "id": "GR-10", "trigger": "missing_target",
+      "action": "need_clarify", "desc": "缺少目标设备/位置" }
+  ],
+  "clarify_priority": [
+    "risky_action_need_confirm",
+    "capability_unsupported", "device_unavailable",
+    "intent_conflict",
+    "ambiguous_entity", "entity_not_found",
+    "missing_required_slot",
+    "parse_time_failed", "parse_duration_failed",
+    "low_confidence"
+  ]
+}
+\end{verbatim}
+}
+
+\textbf{为什么}：BRD §7.1要求所有全局红线触发即NeedClarify，§6.1.6定义了优先级顺序。\textbf{自测}：能找到intent\_risk["HOUSEKEEPING"]["require\_confirm"] == true。
+
+\newpage
+
+% ---------- DAY 3 ----------
+\subsection{Day 3：数据模型定义（models.py）}
+
+\textbf{目标}：把BRD §5.2（输出契约）和§6.1（NeedClarify字段规范）转成Python数据类，后续所有模块统一使用。
+
+\subsubsection*{Step 3.1 — 新建 llm/models.py}
+
+需要定义以下5个核心数据模型：
+
+\begin{enumerate}
+    \item \textbf{IntentCandidate} — 候选意图：L1/L2/L3/ID + score
+    \item \textbf{Slot} — 单个槽位：name + value + validation\_status (valid/clamped/defaulted/invalid)
+    \item \textbf{NeedClarify} — 澄清输出：reason\_code (14个枚举之一) + clarify\_slot + candidates[ ] + prompt\_key + confirm\_action
+    \item \textbf{DecisionTrace} — 追溯记录：step\_name + rule\_id + input + output + result + timestamp
+    \item \textbf{FinalOutput} — 最终输出：final\_intent + final\_slots + resolved\_entities + result\_type (execute/need\_clarity/reject) + decision\_trace[ ]
+\end{enumerate}
+
+\textbf{关键代码结构}：
+
+{\small
+\begin{verbatim}
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Optional
+
+class ResultType(str, Enum):
+    EXECUTE = "execute"
+    NEED_CLARIFY = "need_clarify"
+    REJECT = "reject"
+
+class ReasonCode(str, Enum):
+    MISSING_REQUIRED_SLOT = "missing_required_slot"
+    INVALID_ENUM = "invalid_enum"
+    OUT_OF_RANGE_CLAMPED = "out_of_range_clamped"
+    CAPABILITY_UNSUPPORTED = "capability_unsupported"
+    AMBIGUOUS_ENTITY = "ambiguous_entity"
+    ENTITY_NOT_FOUND = "entity_not_found"
+    LOCALE_MISSING_DEFAULTED = "locale_missing_defaulted"
+    INTENT_CONFLICT = "intent_conflict"
+    LOW_CONFIDENCE = "low_confidence"
+    RISKY_ACTION_NEED_CONFIRM = "risky_action_need_confirm"
+    PARSE_TIME_FAILED = "parse_time_failed"
+    PARSE_DURATION_FAILED = "parse_duration_failed"
+    DEVICE_UNAVAILABLE = "device_unavailable"
+    OUT_OF_SCOPE = "out_of_scope"
+
+@dataclass
+class IntentCandidate:
+    L1: str; L2: str; L3: str; id: str
+    score: float = 1.0
+
+@dataclass
+class Slot:
+    name: str; value: str
+    status: str = "raw"  # raw|valid|clamped|defaulted|invalid
+
+@dataclass
+class NeedClarify:
+    reason_code: ReasonCode
+    clarify_slot: str
+    candidates: list = field(default_factory=list)
+    prompt_key: Optional[str] = None
+    target_intent: Optional[IntentCandidate] = None
+    confirm_action: Optional[dict] = None
+
+@dataclass
+class DecisionTraceStep:
+    step: str; result: str
+    rule_id: Optional[str] = None
+    input_data: dict = field(default_factory=dict)
+    output_data: dict = field(default_factory=dict)
+
+@dataclass
+class FinalOutput:
+    final_intent: Optional[IntentCandidate]
+    final_slots: dict
+    resolved_entities: dict
+    result_type: ResultType
+    decision_trace: list
+    clarify_info: Optional[NeedClarify] = None
+\end{verbatim}
+}
+
+\textbf{为什么}：BRD §5.2定义了必须输出的字段；§6.1定义了NeedClarify必填字段；§11要求所有决策可追溯。\textbf{自测}：\texttt{python -c "from models import FinalOutput, ResultType; print(ResultType.EXECUTE)"}
+
+\newpage
+
+% ---------- DAY 4 ----------
+\subsection{Day 4：重写 System Prompt + 改造 Chatbot 节点}
+
+\textbf{目标}：让LLM不再自由发挥，而是按BRD intent定义输出结构化JSON。
+
+\subsubsection*{Step 4.1 — 重写 prompts/system\_prompt.txt}
+
+新建内容必须包含：
+
+\begin{enumerate}
+    \item \textbf{角色定义}：你是五星级酒店客房服务Agent，仅处理3类服务请求（ROOM\_SERVICE / HOUSEKEEPING / HOTEL\_CALL）+ 1类叫醒（ALARM）
+    \item \textbf{意图定义表}：直接嵌入6条intent的L1/L2/L3/ID/required/optional
+    \item \textbf{槽位说明}：request\_type的6个枚举值含义、duration范围[1, 10080]、time格式
+    \item \textbf{输出格式要求}：必须输出JSON，格式为 \texttt{\{"intents": [...], "slots": \{...\}, "entities": \{...\}\}}
+    \item \textbf{工具调用铁律}：保留原有的6个工具使用规则，但加上"缺少required槽位时先追问再调工具"
+    \item \textbf{安全边界}：拒绝酒店服务以外的问题
+\end{enumerate}
+
+\textbf{为什么}：BRD §9步骤2要求LLM输出候选意图/槽位/实体；§10.4要求系统输出可用于对话层的结构化信息。\textbf{自测}：用Ollama命令行测试\texttt{ollama run qwen2.5:7b}配合新prompt，输入"送两瓶水到301"，输出JSON含\texttt{\{"L1": "ROOM\_SERVICE", ...\}}。
+
+\subsubsection*{Step 4.2 — 改造 chatbot\_node (room\_service\_agent.py)}
+
+在现有\texttt{chatbot\_node}中：
+
+\begin{itemize}
+    \item \textbf{改}：system\_prompt 加载新的 txt 文件
+    \item \textbf{改}：LLM 调用时加 \texttt{format="json"}（qwen2.5支持Ollama的结构化JSON模式）
+    \item \textbf{改}：LLM 返回后增加 JSON 解析步骤，提取 intents/slots/entities
+    \item \textbf{加}：解析失败时的 fallback（retry一次，仍失败则走 need\_clarify）
+    \item \textbf{加}：将解析结果写入 State（新增 \texttt{raw\_intents} / \texttt{raw\_slots} 字段）
+\end{itemize}
+
+\subsubsection*{Step 4.3 — 扩展 State 定义 (room\_service\_agent.py)}
+
+在现有 State 中新增以下字段：
+
+{\small
+\begin{verbatim}
+class State(TypedDict):
+    messages: Annotated[list, add_messages]    # 已有
+    context: str                                 # 已有（RAG）
+    is_safe: str                                 # 已有（护栏）
+    # 以下新增
+    locale: str                                  # Phase 0 新增
+    raw_intents: list                            # chatbot输出
+    raw_slots: dict                              # chatbot输出
+    raw_entities: dict                           # chatbot输出
+    final_intent: Optional[dict]                 # 经校验的最终intent
+    final_slots: dict                            # 经校验的最终slots
+    result_type: str                             # execute/need_clarify/reject
+    clarify_info: Optional[dict]                 # NeedClarify详情
+    decision_trace: list                         # 全链路追溯
+    confirm_pending: bool                        # 是否等待二次确认
+\end{verbatim}
+}
+
+\textbf{为什么}：State是LangGraph节点间传递数据的唯一方式，需要扩展以承载校验链路各节点的中间结果。\textbf{自测}：运行\texttt{main\_router.py}，输入"送两瓶水到301"，日志中能看到\texttt{raw\_intents}不为空。
+
+\newpage
+
+% ---------- DAY 5 ----------
+\subsection{Day 5：槽位校验器（slot\_validator.py）}
+
+\textbf{目标}：对chatbot提取的槽位做BRD §10.1要求的enum/range/required校验。
+
+\subsubsection*{Step 5.1 — 新建 llm/slot\_validator.py}
+
+实现以下3个校验函数：
+
+\begin{enumerate}
+    \item \texttt{validate\_enum(slot\_name, value, slot\_defs)} — 查slot\_definitions.json中的enum列表，不匹配返回invalid\_enum
+    \item \texttt{validate\_range(slot\_name, value, slot\_defs)} — 查min/max，越界则clamp并标记out\_of\_range\_clamped
+    \item \texttt{check\_required(intent\_id, slots, intent\_defs)} — 查intent\_definitions.json中的required列表，缺失返回missing\_required\_slot
+\end{enumerate}
+
+\textbf{槽位校验映射表}（从BRD §8.3 SlotDefinitions摘取）：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{槽位} & \textbf{校验类型} & \textbf{规则} & \textbf{失败reason\_code} \\
+\midrule
+request\_type & enum & 6个枚举值 & invalid\_enum \\
+priority & enum+default & 4个枚举值，默认normal & invalid\_enum \\
+alarm\_action & enum & set/delete/close & invalid\_enum \\
+duration & range & [1.0, 10080.0] & out\_of\_range\_clamped \\
+time & format & HH:MM可解析，否则 parse\_time\_failed & parse\_time\_failed \\
+language & enum+fallback & 4个枚举值，默认zh-CN & locale\_missing\_defaulted \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{集成到图中}：在\texttt{build\_graph()}中注册\texttt{slot\_validator}节点，放在chatbot之后。校验结果写入State的\texttt{final\_slots}和\texttt{decision\_trace}。
+
+\textbf{为什么}：BRD AC1要求枚举值闭环、AC3要求槽位范围与clamp生效、AC4要求缺失required槽必进入need\_clarify。\textbf{自测}：输入"送东西到301"（没说什么东西），应走到need\_clarify（missing\_required\_slot→details）。
+
+% ---------- DAY 6 ----------
+\subsection{Day 6：能力Gating + 风控红线}
+
+\textbf{目标}：实现BRD §10.2的能力矩阵gating和§7的风控红线检查。
+
+\subsubsection*{Step 6.1 — 新建 llm/capability\_gate.py}
+
+\begin{itemize}
+    \item 加载\texttt{capability\_matrix.json}
+    \item 根据intent的device\_type查supported\_intents
+    \item 不匹配 → reason\_code = capability\_unsupported → need\_clarify
+    \item 注意：ALARM的device\_type是alarm，其他3个intent是service
+\end{itemize}
+
+\subsubsection*{Step 6.2 — 新建 llm/risk\_checker.py}
+
+实现两级检查：
+
+\begin{enumerate}
+    \item \textbf{Intent级}：查\texttt{risk\_control.json}中的intent\_risk。HOUSEKEEPING/HOTEL\_CALL/ROOM\_SERVICE的require\_confirm=true → 首次触发输出risky\_action\_need\_confirm + confirm\_action结构
+    \item \textbf{全局GR-01$\sim$10}：遍历global\_rules数组，检查每条规则的trigger条件
+\end{enumerate}
+
+\textbf{二次确认流程}：
+\begin{itemize}
+    \item 高风险intent首次触发 → result\_type=need\_clarify, reason\_code=risky\_action\_need\_confirm, confirm\_action=\{对象/范围/参数摘要\}
+    \item 用户回复"确认"/"好的" → State.confirm\_pending=True → 放行到tools
+    \item 用户回复"取消" → 终止
+\end{itemize}
+
+\textbf{集成到图中}：capability\_gate → risk\_checker → tools（或分流到clarify\_builder）。
+
+\textbf{为什么}：BRD §7明确3个服务intent为高风险必须二次确认；AC2要求能力矩阵严格生效。\textbf{自测}：输入"帮我打扫301房间"→首次输出need\_clarify要求确认→回复"确认"→执行request\_cleaning。
+
+\newpage
+
+% ---------- DAY 7 ----------
+\subsection{Day 7：NeedClarify + ResponseFormatter + Trace}
+
+\textbf{目标}：实现BRD §6.1的标准澄清输出和§5.2的最终输出契约。
+
+\subsubsection*{Step 7.1 — 新建 llm/clarify\_builder.py}
+
+实现\texttt{build\_clarify(reason\_code, ...) → NeedClarify}：
+
+\begin{itemize}
+    \item 按BRD §6.1.5的强约束：每个reason\_code对应必填字段
+    \item \texttt{missing\_required\_slot} → 输出clarify\_slot=缺失字段名
+    \item \texttt{ambiguous\_entity} → 输出candidates候选列表
+    \item \texttt{risky\_action\_need\_confirm} → 输出confirm\_action结构
+    \item 按§6.1.6优先级排序：多个reason时选主reason\_code，其余写入additional\_reasons
+\end{itemize}
+
+\subsubsection*{Step 7.2 — 新建 llm/response\_formatter.py}
+
+实现\texttt{format\_response(state) → FinalOutput}：
+
+\begin{verbatim}
+if state.result_type == "execute":
+    → 组装 final_intent + final_slots + resolved_entities
+      + result_type="execute" + decision_trace
+elif state.result_type == "need_clarify":
+    → 嵌入 clarify_info（reason_code + clarify_slot + candidates）
+elif state.result_type == "reject":
+    → reason_code = out_of_scope + 可用能力提示
+\end{verbatim}
+
+同时生成\texttt{decision\_trace}：遍历所有节点的校验结果，每条trace包含step名、rule\_id、输入、输出、结果。
+
+\subsubsection*{Step 7.3 — 改造 build\_graph()}
+
+将全部新节点插入现有图：
+
+\begin{verbatim}
+START → content_safety → locale_resolver → rag_retrieve
+  → chatbot → slot_validator → entity_resolver
+  → capability_gate → risk_checker → tools
+  → response_formatter → END
+\end{verbatim}
+
+每个校验节点旁路：失败 → clarify\_builder → response\_formatter → END。
+
+\textbf{为什么}：BRD §5.2要求输出final\_intent/final\_slots/resolved\_entities/result\_type/decision\_trace；AC5要求实体/动作可追溯。\textbf{自测}：全链路测试——输入"送两瓶水到301"输出完整JSON含所有字段。
+
+% ---------- DAY 8 ----------
+\subsection{Day 8：工具函数对齐 + 补齐缺失工具}
+
+\textbf{目标}：改造现有6个工具 + 新增3个缺失工具，使工具层与BRD intent完全对应。
+
+\subsubsection*{Step 8.1 — 改造 tools\_api/mock\_services.py}
+
+每个工具函数增加\texttt{request\_type}参数+返回值改为结构化：
+
+{\small
+\begin{verbatim}
+# 改造前
+def request_cleaning(room_number, time_preference="现在") -> str:
+    return "已安排保洁..."
+
+# 改造后
+def request_cleaning(room_number, time_preference="现在",
+                     request_type="housekeeping") -> dict:
+    return {
+        "status": "success",
+        "intent_id": "SVC_HK_001",
+        "request_type": request_type,
+        "room_number": room_number,
+        "message": "已安排保洁...",
+        "trace": {"tool": "request_cleaning", "request_type": request_type}
+    }
+\end{verbatim}
+}
+
+\subsubsection*{Step 8.2 — 新增3个缺失工具}
+
+\begin{enumerate}
+    \item \texttt{delete\_alarm(label, alarm\_id=None)} — 对应ALARM\_002（删除闹钟），需二次确认
+    \item \texttt{close\_alarm(alarm\_action="close", label=None)} — 对应ALARM\_003（关闭闹钟），需二次确认
+    \item \texttt{call\_hotel(request\_type="hotel\_call")} — 对应HOTEL\_CALL（呼叫人工），需二次确认
+\end{enumerate}
+
+更新\texttt{ALL\_TOOLS}列表，从6个变为9个。
+
+\textbf{工具 ↔ Intent 最终映射}：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{工具} & \textbf{Intent ID} & \textbf{request\_type} \\
+\midrule
+request\_supplies & SVC\_ROOM\_001 & amenity \\
+order\_room\_service & SVC\_ROOM\_001 & room\_service \\
+request\_cleaning & SVC\_HK\_001 & housekeeping \\
+report\_maintenance & SVC\_HK\_001 & workorder \\
+request\_laundry & SVC\_HK\_001 & amenity \\
+call\_hotel & SVC\_CALL\_001 & hotel\_call \\
+set\_wake\_up\_call & ALARM\_001 & — (alarm\_action=set) \\
+delete\_alarm & ALARM\_002 & — (alarm\_action=delete) \\
+close\_alarm & ALARM\_003 & — (alarm\_action=close) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{为什么}：BRD IntentDefinitions中ALARM\_002和ALARM\_003没有对应工具，HOTEL\_CALL也没有。\textbf{自测}：每个工具单独测试，确认返回结构化dict含status和trace。
+
+\newpage
+
+% ---------- DAY 9 ----------
+\subsection{Day 9：Locale + Entity 解析 + 验收测试}
+
+\textbf{目标}：补上locale和entity解析，编写AC1-AC5验收测试。
+
+\subsubsection*{Step 9.1 — 新建 llm/locale\_resolver.py}
+
+\begin{itemize}
+    \item 检查用户输入中的locale信号（中/英文、粤语词汇）
+    \item 默认回退到zh-CN（从general.json读default）
+    \item 输出reason\_code=locale\_missing\_defaulted（trace标记）
+\end{itemize}
+
+\subsubsection*{Step 9.2 — 新建 llm/entity\_resolver.py}
+
+\begin{itemize}
+    \item 客房服务的主要实体是\textbf{房间号}（如301、1205）和\textbf{服务类型}（request\_type）
+    \item 房间号正则：\texttt{\textbackslash d\{3,4\}}（3-4位数字）
+    \item 服务类型：由chatbot的slot提取已覆盖，此处做confirm
+    \item 歧义：多个房间号 → ambiguous\_entity → 列出候选
+    \item 缺失：没找到房间号 → 如intent需要location则entity\_not\_found → need\_clarify
+\end{itemize}
+
+\subsubsection*{Step 9.3 — 新建 tests/test\_room\_service.py}
+
+为每条AC编写单元测试：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{AC} & \textbf{测试用例} & \textbf{预期} \\
+\midrule
+AC1 & "送东西到301" request\_type缺失 & need\_clarify + invalid\_enum或missing\_slot \\
+AC2 & 意图错误路由到不支持device & capability\_unsupported \\
+AC3 & "设置闹钟50000分钟" duration越界 & out\_of\_range\_clamped → clamp到10080 \\
+AC4 & "打扫"缺房间号 & need\_clarify + missing\_required\_slot (location) \\
+AC5 & "送水到301" 全路径 & trace含intent识别→slot校验→工具调用完整链路 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{为什么}：BRD §11定义AC1-AC5为业务验收标准，必须全部通过才算对齐。
+
+% ---------- DAY 10 ----------
+\subsection{Day 10：全链路联调 + Gradio 验收}
+
+\textbf{目标}：端到端跑通，用Gradio界面演示给团队看。
+
+\subsubsection*{Step 10.1 — 全链路集成测试}
+
+\begin{enumerate}
+    \item 启动服务：\texttt{python server.py} 或 \texttt{python main\_router.py}
+    \item 测试6条intent每条至少1个用例（execute路径 + need\_clarify路径）
+    \item 测试二次确认流程：高风险intent → 确认 → 执行
+    \item 测试GR红线触发：说"取消所有服务" → risky\_action\_need\_confirm
+    \item 测试护栏：说"怎么黑WiFi" → reject
+\end{enumerate}
+
+\subsubsection*{Step 10.2 — Gradio UI 验收}
+
+启动\texttt{python room\_service\_agent.py}，在浏览器用Gradio交互：
+
+\begin{itemize}
+    \item 验证多轮对话记忆（同一session\_id内追问）
+    \item 验证退房清除（DELETE /api/sessions/\{id\}）
+    \item 截图留档
+\end{itemize}
+
+\subsubsection*{Step 10.3 — 更新 server.py 的 ChatResponse 模型}
+
+将\texttt{ChatResponse}从简单的\texttt{response: str}改为返回完整FinalOutput结构，让语音Agent和控制Agent能拿到结构化数据。
+
+\newpage
+
+% ---------- SUMMARY ----------
+\subsection{Day 1-10 总览表}
+
+\begin{longtable}{@{}cllp{4.5cm}@{}}
+\toprule
+\textbf{Day} & \textbf{阶段} & \textbf{动作} & \textbf{产出文件} \\
+\midrule
+\endhead
+1 & 🔴 P0 & 新建 general.json + intent\_definitions.json & 2个JSON \\
+2 & 🔴 P0 & 新建 slot\_definitions.json + capability\_matrix.json + risk\_control.json & 3个JSON \\
+3 & 🔴 P0 & 新建 models.py (6个数据类) + 扩展State & models.py \\
+4 & 🔴 P0 & 重写 system\_prompt.txt + 改造 chatbot\_node & prompt + agent \\
+5 & 🟡 P1 & 新建 slot\_validator.py + 集成到图 & slot\_validator.py \\
+6 & 🟡 P1 & 新建 capability\_gate.py + risk\_checker.py & 2个py \\
+7 & 🟡 P1 & 新建 clarify\_builder.py + response\_formatter.py + 改造图 & 2个py + agent \\
+8 & 🟢 P2 & 改造6个工具 + 新增3个工具 & mock\_services.py \\
+9 & 🟢 P2 & 新建 locale\_resolver.py + entity\_resolver.py + tests/ & 3个py \\
+10 & 🟢 P2 & 全链路联调 + Gradio验收 + server.py改造 & 测试通过 \\
+\bottomrule
+\caption{10天实操计划总览}
+\end{longtable}
+
+\newpage
+
+% ==========================================
+\section{后续扩展方向}
+% ==========================================
+
+\begin{enumerate}
+    \item \textbf{与点餐Agent边界协商}：\texttt{order\_room\_service}的"送餐"功能是否需要移交给点餐Agent，或保留在客房Agent作为"饮品/零食配送"。
+    \item \textbf{MemorySaver → SqliteSaver升级}：当前MemorySaver重启即丢失，生产环境需持久化。
+    \item \textbf{配置表热更新}：BRD配置表支持灰度发布，需实现配置文件变更后不重启生效。
+    \item \textbf{多语言支持}：当前仅支持中文，BRD定义了zh-CN/zh-GD/en-US/en-SG四种locale。
+    \item \textbf{与真实酒店PMS系统对接}：将mock工具函数替换为真实API调用。
+\end{enumerate}
+
+\vspace{1cm}
+\begin{center}
+\rule{0.5\textwidth}{0.5pt}\\[4pt]
+\textit{本文档基于酒店BRD全表（2026-01-23）\\ 以及2026-06-09完成的BRD对齐差距分析编写。\\ 原始BRD未做任何删改。}
+\end{center}
+
+\end{document}

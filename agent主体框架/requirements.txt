@@ -1,0 +1,34 @@
+# ============================================================
+# 酒店客房服务 Agent — Python 依赖
+# ============================================================
+# 安装: pip install -r requirements.txt
+# Python 版本: >= 3.10
+#
+# 说明: 本项目使用 DeepSeek API（通过 langchain-openai 兼容接口）。
+#       Ollama 为可选本地方案，不需要可以不装。
+
+# ---------- LLM 调用 ----------
+langchain-openai>=0.1.0        # DeepSeek API（OpenAI 兼容接口）
+
+# ---------- LangGraph & LangChain ----------
+langgraph>=0.2.0               # 对话图编排（核心）
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+
+# ---------- RAG 向量检索 ----------
+langchain-chroma>=0.1.0        # Chroma 向量数据库
+langchain-huggingface>=0.1.0   # HuggingFace Embeddings
+sentence-transformers>=2.7.0   # all-MiniLM-L6-v2 等模型
+
+# ---------- Web 框架 ----------
+fastapi>=0.111.0               # HTTP API 服务
+uvicorn>=0.30.0                # ASGI 服务器
+
+# ---------- 调试/测试界面 ----------
+gradio>=4.0.0                  # 本地交互界面（可选）
+gradio-client>=0.17.0          # Gradio 客户端（可选）
+
+# ---------- 本地模型（可选，仅 Ollama 方案需要）----------
+# ollama                        # Ollama 本地模型运行
+# langchain-ollama>=0.1.0       # Ollama 集成

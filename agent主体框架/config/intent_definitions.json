@@ -1,0 +1,84 @@
+{
+  "_说明": "BRD §8.2 IntentDefinitions 表 — 仅摘取客房服务 Agent 负责的 6 条意图。其余 LGT_*/CUR_*/AC_*/TV_*/MUS_*/SPK_*/SCR_*/SCN_*/Q_*/FAQ_*/EXIT_*/CLARIFY_* 分别属于控制Agent / 咨询Agent / 公共模块。",
+
+  "intents": [
+    {
+      "id": "SVC_ROOM_001",
+      "L1": "ROOM_SERVICE",
+      "L2": "CREATE_REQUEST",
+      "L3": "DEFAULT",
+      "device_type": "service",
+      "required": ["request_type"],
+      "optional": ["details", "location", "priority"],
+      "description": "amenity request / ticket — 客房物品补给（送毛巾/矿泉水/牙刷等消耗品，不含送餐。送餐由点餐Agent负责）",
+      "risk_level": "high",
+      "require_confirm": true,
+      "example": "送两瓶矿泉水到301"
+    },
+    {
+      "id": "SVC_HK_001",
+      "L1": "HOUSEKEEPING",
+      "L2": "CREATE_REQUEST",
+      "L3": "DEFAULT",
+      "device_type": "service",
+      "required": ["request_type"],
+      "optional": ["details", "location", "priority"],
+      "description": "housekeeping request / ticket — 客房清洁/打扫/物品补给",
+      "risk_level": "high",
+      "require_confirm": true,
+      "example": "打扫一下301房间"
+    },
+    {
+      "id": "SVC_CALL_001",
+      "L1": "HOTEL_CALL",
+      "L2": "CREATE_REQUEST",
+      "L3": "DEFAULT",
+      "device_type": "service",
+      "required": ["request_type"],
+      "optional": ["details", "location", "priority"],
+      "description": "call hotel / connect operator — 呼叫酒店/人工服务/转接前台",
+      "risk_level": "high",
+      "require_confirm": true,
+      "example": "帮我叫一下前台"
+    },
+    {
+      "id": "ALARM_001",
+      "L1": "ALARM",
+      "L2": "SETTINGS",
+      "L3": "DEFAULT",
+      "device_type": "alarm",
+      "required": ["time", "duration"],
+      "optional": ["label", "repeat"],
+      "description": "set alarm/timer — 设定叫醒/闹钟/定时器",
+      "risk_level": "medium",
+      "require_confirm": false,
+      "example": "明早7点叫醒我，房号503"
+    },
+    {
+      "id": "ALARM_002",
+      "L1": "ALARM",
+      "L2": "DELETE",
+      "L3": "DEFAULT",
+      "device_type": "alarm",
+      "required": ["label"],
+      "optional": ["alarm_id"],
+      "description": "delete alarm/timer — 删除闹钟/取消叫醒",
+      "risk_level": "medium",
+      "require_confirm": true,
+      "example": "把起床闹钟删掉"
+    },
+    {
+      "id": "ALARM_003",
+      "L1": "ALARM",
+      "L2": "CLOSE",
+      "L3": "DEFAULT",
+      "device_type": "alarm",
+      "required": ["alarm_action"],
+      "optional": ["label"],
+      "description": "stop alarm/timer — 关闭/停止正在响的闹钟",
+      "risk_level": "medium",
+      "require_confirm": true,
+      "example": "把闹钟关掉"
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "_说明": "BRD §8.3 SlotDefinitions 表（Sheet: SlotDefinitions2）— 仅摘取客房服务 Agent 相关的 11 个槽位。其余 brightness/color_temp/power/mode/fan_speed/volume/channel 等属于控制Agent。",
+
+  "slots": [
+    {
+      "id": "SL_001",
+      "name": "alarm_action",
+      "type": "enum",
+      "enum": ["set", "delete", "close"],
+      "description": "闹钟动作：set(设定)/delete(删除)/close(关闭)",
+      "used_by_intents": ["ALARM_003"]
+    },
+    {
+      "id": "SL_002",
+      "name": "alarm_id",
+      "type": "string",
+      "description": "闹钟唯一标识；用于精确删除/关闭某个闹钟",
+      "used_by_intents": ["ALARM_002"]
+    },
+    {
+      "id": "SL_015",
+      "name": "details",
+      "type": "free_text",
+      "description": "服务请求详情文本（如'送两条毛巾/空调不制冷'）。可在后处理中抽取 item/quantity/故障类型等",
+      "used_by_intents": ["SVC_ROOM_001", "SVC_HK_001", "SVC_CALL_001"]
+    },
+    {
+      "id": "SL_019",
+      "name": "duration",
+      "type": "range",
+      "min": 1.0,
+      "max": 10080.0,
+      "default": 60,
+      "unit": "分钟",
+      "description": "持续时间/延时。1分钟到7天（10080分钟）。用于闹钟响铃时长、定时器等。未指定时默认60分钟",
+      "used_by_intents": ["ALARM_001"]
+    },
+    {
+      "id": "SL_026",
+      "name": "label",
+      "type": "free_text",
+      "description": "标签/名称：用于闹钟（如'起床提醒'）或请求备注",
+      "used_by_intents": ["ALARM_001", "ALARM_002", "ALARM_003"]
+    },
+    {
+      "id": "SL_027",
+      "name": "language",
+      "type": "enum",
+      "enum": ["zh-CN", "zh-GD", "en-US", "en-SG"],
+      "default": "zh-CN",
+      "description": "语种/方言标识；用于ASR/语音播报/界面文案选择。来源：General表 ID=1",
+      "used_by_intents": ["*"]
+    },
+    {
+      "id": "SL_028",
+      "name": "location",
+      "type": "free_text",
+      "pattern": "\\d{3,4}",
+      "pattern_description": "3-4位数字房间号",
+      "description": "位置/区域（通常为房间号如301、1205）。后处理按上下文映射到房间枚举或地理位置",
+      "used_by_intents": ["SVC_ROOM_001", "SVC_HK_001", "SVC_CALL_001"]
+    },
+    {
+      "id": "SL_034",
+      "name": "priority",
+      "type": "enum",
+      "enum": ["low", "normal", "high", "urgent"],
+      "default": "normal",
+      "description": "请求优先级：low(低)/normal(普通)/high(高)/urgent(紧急)",
+      "used_by_intents": ["SVC_ROOM_001", "SVC_HK_001", "SVC_CALL_001"]
+    },
+    {
+      "id": "SL_038",
+      "name": "repeat",
+      "type": "free_text",
+      "description": "重复规则：once/daily/weekdays/weekends/每周一三五等；后处理可转换为 RRULE",
+      "used_by_intents": ["ALARM_001"]
+    },
+    {
+      "id": "SL_039",
+      "name": "request_type",
+      "type": "enum",
+      "enum": ["room_service", "housekeeping", "hotel_call", "workorder", "amenity", "other"],
+      "description": "服务请求类型；与业务路由/工单系统对应。\n- room_service: 客房物品补给（毛巾/水/牙刷等，不含送餐）\n- housekeeping: 清洁打扫\n- hotel_call: 呼叫前台/人工\n- workorder: 维修工单\n- amenity: 物品补给/洗衣等\n- other: 其他",
+      "used_by_intents": ["SVC_ROOM_001", "SVC_HK_001", "SVC_CALL_001"]
+    },
+    {
+      "id": "SL_046",
+      "name": "time",
+      "type": "time_format",
+      "format": "HH:MM",
+      "description": "时间点，支持am/pm、'早上7点'等口语表达。用于闹钟/提醒/定时等",
+      "used_by_intents": ["ALARM_001"]
+    }
+  ],
+
+  "_校验规则说明": {
+    "enum校验": "有 enum 字段的槽位 → 值必须在列表中，否则 invalid_enum",
+    "range校验": "有 min/max 字段的槽位 → 值在[min, max]内，越界则clamp并标记 out_of_range_clamped",
+    "default补全": "有 default 字段的槽位 → 用户未填时自动填入，标记 defaulted",
+    "format校验": "有 format 字段的槽位 → 尝试按格式解析，失败则 parse_time_failed",
+    "required检查": "根据 intent_definitions.json 中每个intent的 required 列表，检查是否缺失 → missing_required_slot"
+  }
+}

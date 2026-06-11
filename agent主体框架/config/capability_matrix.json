@@ -1,0 +1,41 @@
+{
+  "_说明": "BRD §8.4 CapabilityMatrix 表 — 仅摘取客房服务 Agent 相关的 device_type 行。service行(CM_010) + alarm行(CM_013)。",
+
+  "matrix": {
+    "service": {
+      "source_row": "CM_010",
+      "description": "酒店服务类设备 — 支持前台呼叫、客房打扫、客房补给等",
+      "supported_intents": [
+        "HOTEL_CALL",
+        "HOUSEKEEPING",
+        "ROOM_SERVICE",
+        "NEED_CLARIFY",
+        "EXIT"
+      ],
+      "unsupported_note": "ALARM 不在 service 设备下，请使用 device_type=alarm"
+    },
+    "alarm": {
+      "source_row": "CM_013",
+      "description": "闹钟类设备 — 仅支持闹钟设定/删除/关闭",
+      "supported_intents": [
+        "ALARM"
+      ],
+      "unsupported_note": "HOUSEKEEPING/HOTEL_CALL/ROOM_SERVICE 不在 alarm 设备下，请使用 device_type=service"
+    }
+  },
+
+  "_gating_rule": {
+    "description": "根据意图的 device_type 查对应的 supported_intents 列表",
+    "logic": "if intent.L1 not in matrix[intent.device_type].supported_intents → capability_unsupported → need_clarify 或 reject",
+    "example_pass": "意图 ROOM_SERVICE → device_type=service → service的supported_intents包含ROOM_SERVICE → ✅ 通过",
+    "example_block": "意图 ROOM_SERVICE → device_type=light → light的supported_intents不包含ROOM_SERVICE → ❌ capability_unsupported"
+  },
+
+  "_intent_to_device_mapping": {
+    "ROOM_SERVICE": "service",
+    "HOUSEKEEPING": "service",
+    "HOTEL_CALL": "service",
+    "ALARM": "alarm",
+    "注": "此映射也包含在 intent_definitions.json 每条意图的 device_type 字段中"
+  }
+}
