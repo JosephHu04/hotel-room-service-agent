@@ -2,9 +2,14 @@
 Hotel Room Service Tool Functions (Function Calling)
 ==============================================
 Day 8 refactor:
-  - All tools return structured dict (with status / intent_id / request_type / message / trace)
+  - All tools return structured dict (status / intent_id / request_type / room_number / trace)
   - Added request_type parameter (aligned with BRD SL_039 enum)
   - Added 3 missing tools: call_hotel / delete_alarm / close_alarm
+
+★ Day 9 refactor:
+  - Removed hardcoded message templates — tools return structured data only
+  - The LLM (Agent) formulates natural-language replies based on structured fields
+  - This lets the Agent decide HOW to communicate, not the code
 
 Tool ↔ BRD Intent mapping:
   request_supplies    → SVC_ROOM_001 (ROOM_SERVICE, amenity)
@@ -20,14 +25,19 @@ from langchain_core.tools import tool
 
 
 def _ok(intent_id: str, request_type: str, room_number: str,
-        message: str, tool_name: str, **extra) -> dict:
-    """Unified success response format"""
+        tool_name: str, **extra) -> dict:
+    """
+    Unified success response — structured data only.
+
+    ★ No pre-written message — the LLM formulates the natural-language reply
+    based on these structured fields. This lets the Agent be the one deciding
+    how to communicate with the guest, not hardcoded templates.
+    """
     result = {
         "status": "success",
         "intent_id": intent_id,
         "request_type": request_type,
         "room_number": room_number,
-        "message": message,
         "trace": {
             "tool": tool_name,
             "intent_id": intent_id,
@@ -66,7 +76,6 @@ def request_supplies(room_number: str, item: str, quantity: int = 1,
         intent_id="SVC_ROOM_001",
         request_type=request_type,
         room_number=room_number,
-        message=f"已安排为房间 {room_number} 配送 {quantity}份{item}，客房服务员将在10分钟内送达。",
         tool_name="request_supplies",
         item=item,
         quantity=quantity,
@@ -92,7 +101,6 @@ def request_cleaning(room_number: str, time_preference: str = "现在",
         intent_id="SVC_HK_001",
         request_type=request_type,
         room_number=room_number,
-        message=f"已安排保洁部在 {time_preference} 为房间 {room_number} 进行打扫。保洁员到达前会电话确认。",
         tool_name="request_cleaning",
         time_preference=time_preference,
     )
@@ -115,17 +123,15 @@ def report_maintenance(room_number: str, issue: str, urgency: str = "normal",
     Returns:
         Structured maintenance work order confirmation
     """
-    urgency_text = "紧急" if urgency == "urgent" else "普通"
     eta = "马上" if urgency == "urgent" else "2小时"
-    emoji = "🔧" if urgency != "urgent" else ""
     return _ok(
         intent_id="SVC_HK_001",
         request_type=request_type,
         room_number=room_number,
-        message=f"已经记录下来了{emoji}，{room_number}房间的{issue}问题，维修师傅{'优先处理，' + eta + '内到' if urgency == 'urgent' else eta + '内到'}。",
         tool_name="report_maintenance",
         issue=issue,
         urgency=urgency,
+        eta=eta,
     )
 
 
@@ -149,7 +155,6 @@ def request_laundry(room_number: str, items: str, pickup_time: str = "现在",
         intent_id="SVC_HK_001",
         request_type=request_type,
         room_number=room_number,
-        message=f"已为房间 {room_number} 安排洗衣服务。待洗衣物：{items}。服务员将在{pickup_time}上门取件。普通洗衣4小时内送回，干洗/熨烫6小时内送回。",
         tool_name="request_laundry",
         items=items,
         pickup_time=pickup_time,
@@ -170,12 +175,10 @@ def call_hotel(room_number: str = "",
     Returns:
         Structured call confirmation
     """
-    loc = f"房间 {room_number}" if room_number else "您"
     return _ok(
         intent_id="SVC_CALL_001",
         request_type=request_type,
         room_number=room_number or "N/A",
-        message=f"已为{loc}转接前台。工作人员将尽快与您联系。如需即时服务请拨打前台电话（0000）。",
         tool_name="call_hotel",
     )
 
@@ -200,7 +203,6 @@ def set_wake_up_call(room_number: str, time: str) -> dict:
         intent_id="ALARM_001",
         request_type="alarm_set",
         room_number=room_number,
-        message=f"已为房间 {room_number} 设置唤醒服务，时间：{time}。届时电话将自动振铃，如未接听将转人工确认。",
         tool_name="set_wake_up_call",
         time=time,
     )
@@ -221,13 +223,10 @@ def delete_alarm(label: str, room_number: str = "", alarm_id: str = "") -> dict:
     Returns:
         Structured deletion confirmation
     """
-    target = f"'{label}'" if label else (f"ID={alarm_id}" if alarm_id else "指定闹钟")
-    loc = f"房间 {room_number}" if room_number else "您的房间"
     return _ok(
         intent_id="ALARM_002",
         request_type="alarm_delete",
         room_number=room_number or "N/A",
-        message=f"已为{loc}取消闹钟 {target}。如需重新设置请随时告知。",
         tool_name="delete_alarm",
         label=label,
         alarm_id=alarm_id,
@@ -248,13 +247,10 @@ def close_alarm(room_number: str = "", label: str = "") -> dict:
     Returns:
         Structured close confirmation
     """
-    target = f"闹钟 '{label}'" if label else "闹钟"
-    loc = f"房间 {room_number}" if room_number else "您的房间"
     return _ok(
         intent_id="ALARM_003",
         request_type="alarm_close",
         room_number=room_number or "N/A",
-        message=f"已为{loc}关闭{target}。",
         tool_name="close_alarm",
         label=label,
     )

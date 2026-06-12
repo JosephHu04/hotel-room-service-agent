@@ -1,14 +1,14 @@
 """
 Hotel Room Service Agent — ReAct Pattern
 ==============================================
-Architecture: LangGraph (Guardrail + RAG + Agent ⇄ Tools)
+Architecture: LangGraph (LLM Safety Check + RAG + Agent ⇄ Tools)
 
-Agent Pattern: LLM-driven autonomous decisions
-  - LLM is the brain: understands intent, judges info completeness, selects tools, asks/executes
-  - Tools are the hands: 8 mock tool functions, mounted outside the agent
-  - Code only does two things: safety baseline + routing
+Agent Pattern: LLM-driven autonomous decisions — the LLM makes ALL decisions
+  - LLM is the brain: safety judgment, intent understanding, tool selection, response wording
+  - Tools are the hands: 8 mock tool functions, return structured data for the LLM to phrase
+  - Code only does: orchestration + routing; NO hardcoded decisions
 
-ReAct Loop: Thought → Action → Observation → Thought → ... → Final Answer
+ReAct Loop: Safety Check → RAG → Thought → Action → Observation → ... → Final Answer
 """
 
 # ============================================================
@@ -163,6 +163,15 @@ if not DEEPSEEK_API_KEY:
         "  .env file format: DEEPSEEK_API_KEY=sk-xxx"
     )
 
+# --- LLM instance for safety check (no tools, low temperature for consistency) ---
+# This is a SEPARATE LLM call — the safety checker only judges content, it doesn't need tools.
+safety_llm = ChatOpenAI(
+    model="deepseek-chat",
+    temperature=0.3,                 # Low temp: consistent safety judgments
+    api_key=DEEPSEEK_API_KEY,
+    base_url=DEEPSEEK_BASE_URL,
+)
+
 # --- ★ Create LLM with bound tools — this IS the Agent's "brain" ---
 # What does bind_tools(ALL_TOOLS) do?
 #   Converts 8 Python functions into OpenAI tool definition format and sends to the API
@@ -188,49 +197,89 @@ logger.info("Available tools: %s", [t.name for t in ALL_TOOLS])
 # ============================================================
 # Every node is a Python function: takes State, returns partial State updates
 
-# --- Node 1: Safety guardrail ---
-def guardrail_node(state: State) -> dict:
-    """
-    Check whether the guest's message contains sensitive keywords.
-    This is the first line of defense BEFORE the LLM is called — the LLM never sees unsafe messages.
+# --- Safety Check System Prompt (LLM judges content safety) ---
+SAFETY_CHECK_PROMPT = """你是一个酒店服务系统的内容安全检查员。你的任务是判断客人发送的消息是否安全、是否适合酒店服务助手处理。
 
-    Input:  state (read guest's last message from state["messages"][-1])
+需要标记为 UNSAFE 的内容类型：
+- 色情、低俗、性暗示内容
+- 暴力、威胁、骚扰、人身攻击
+- 政治敏感话题、政治宣传
+- 黑客攻击、恶意代码、系统入侵
+- 赌博、毒品、违法活动
+- 明显与酒店服务无关的恶意滥用（如要求写代码、写文章、翻译等）
+
+如果消息内容正常、安全，只回复单个词 "SAFE"。
+如果消息不安全，只回复单个词 "UNSAFE"。
+不要解释原因，不要回复其他内容。"""
+
+
+# --- Node 1: LLM Safety Check ---
+def safety_check_node(state: State) -> dict:
+    """
+    ★ LLM 自己判断消息是否安全 —— 替代硬编码关键词匹配。
+
+    LLM 能理解上下文、多语言、隐晦表达，比 Python 子串匹配准确得多。
+
+    Input:  state["messages"][-1] (guest's latest message)
     Output: {"is_safe": "SAFE"} or {"is_safe": "UNSAFE"}
     """
-    last_message = state["messages"][-1].content              # [-1] = last element of the list
+    last_message = state["messages"][-1].content
 
-    dangerous_keywords = ["politics", "hacking", "write code", "intrusion", "violence", "pornography", "gambling"]
-    is_safe = "SAFE"                                          # Default: safe
+    messages = [
+        SystemMessage(content=SAFETY_CHECK_PROMPT),
+        HumanMessage(content=f"请检查以下消息：\n{last_message}")
+    ]
 
-    for kw in dangerous_keywords:                              # Iterate over sensitive keyword list
-        if kw in last_message:                                 # If message contains a sensitive keyword
-            is_safe = "UNSAFE"                                 # Mark as unsafe
-            logger.warning("Guardrail blocked: hit keyword '%s'", kw)  # Log the event
-            break                                              # Stop on first match; don't check further
+    response = safety_llm.invoke(messages)
+    result = response.content.strip().upper()
 
-    return {"is_safe": is_safe}                                # Return update (only is_safe field is changed)
+    # Parse LLM response: look for SAFE or UNSAFE
+    if "UNSAFE" in result:
+        is_safe = "UNSAFE"
+    else:
+        is_safe = "SAFE"
+
+    logger.info("LLM Safety Check: %s (raw: %s)", is_safe, result[:60])
+    return {"is_safe": is_safe}
 
 
 # --- Router A: safe → where? ---
 def check_safety(state: State) -> str:
     """
-    Decide next step based on is_safe:
+    Decide next step based on LLM's safety judgment:
       SAFE   → "retrieve" (proceed to RAG retrieval)
-      UNSAFE → "refuse" (go to refusal node, LLM is never called)
+      UNSAFE → "refuse"  (LLM generates polite refusal)
     """
     return "refuse" if state["is_safe"] == "UNSAFE" else "retrieve"
 
 
-# --- Node 2: Refusal node ---
-def refuse_node(state: State) -> dict:
+# --- Node 2: LLM-generated Refusal ---
+def safety_refuse_node(state: State) -> dict:
     """
-    UNSAFE messages arrive here. Generate a refusal reply and append to conversation history.
-    The LLM is never called — this is a pure-code reply.
+    ★ LLM 自己生成拒绝回复 —— 不再是硬编码英文。
+
+    LLM 根据客人的消息内容，生成自然、礼貌、中文的拒绝回复。
+    客人看到的是有温度的管家式拒绝，而不是冰冷的固定英文。
     """
-    refusal_msg = AIMessage(
-        content="I'm sorry, I'm your hotel service assistant and can only help with hotel-related requests. I'm unable to process this type of inquiry."
-    )
-    return {"messages": [refusal_msg]}                         # Returned message is appended to history via add_messages
+    last_message = state["messages"][-1].content
+
+    refuse_prompt = f"""客人发送了以下消息，被安全审查标记为不适合处理：
+"{last_message}"
+
+请以酒店客房服务管家的身份，礼貌地拒绝这条请求：
+- 语气要温和、自然，像真正的管家在说话
+- 如果客人可能有正当酒店需求，引导联系前台（分机0000）
+- 简短，1-2句话即可
+- 用中文回复"""
+
+    messages = [
+        SystemMessage(content=refuse_prompt),
+        HumanMessage(content="请生成一段礼貌的拒绝回复。")
+    ]
+
+    response = safety_llm.invoke(messages)
+    logger.info("LLM generated refusal: %s", (response.content or "")[:80])
+    return {"messages": [response]}
 
 
 # --- Node 3: RAG knowledge retrieval ---
@@ -321,7 +370,7 @@ def build_graph():
         START
           │
           ▼
-      guardrail ──(UNSAFE)──► refuse ──► END
+    safety_check ──(UNSAFE)──► safety_refuse ──► END
           │
           │(SAFE)
           ▼
@@ -333,12 +382,15 @@ def build_graph():
           ├── text → END   │
           │                │
           └── tool_call → tools ──┘ (back to agent)
+
+    All decisions (safety, intent, tool selection, response wording) are made by the LLM.
+    Code only does orchestration + routing.
     """
     graph_builder = StateGraph(State)          # StateGraph is the core class of LangGraph
 
     # --- Register nodes: give each function a name ---
-    graph_builder.add_node("guardrail", guardrail_node)
-    graph_builder.add_node("refuse", refuse_node)
+    graph_builder.add_node("safety_check", safety_check_node)
+    graph_builder.add_node("safety_refuse", safety_refuse_node)
     graph_builder.add_node("rag_retrieve", rag_node)
     graph_builder.add_node("agent", agent_node)
     # ToolNode is a LangGraph built-in: auto-executes the Python function for each tool_call
@@ -346,18 +398,18 @@ def build_graph():
 
     # --- Connect edges: define the flow ---
 
-    # Fixed edge: START → guardrail (unconditional)
-    graph_builder.add_edge(START, "guardrail")
+    # Fixed edge: START → safety_check (unconditional)
+    graph_builder.add_edge(START, "safety_check")
 
-    # Conditional edge: guardrail → refuse or rag_retrieve (depends on check_safety return value)
+    # Conditional edge: safety_check → safety_refuse or rag_retrieve (depends on LLM's safety judgment)
     graph_builder.add_conditional_edges(
-        "guardrail", check_safety,
-        {"refuse": "refuse", "retrieve": "rag_retrieve"}
+        "safety_check", check_safety,
+        {"refuse": "safety_refuse", "retrieve": "rag_retrieve"}
     )
 
     # Fixed edges
-    graph_builder.add_edge("rag_retrieve", "agent")   # RAG → agent
-    graph_builder.add_edge("refuse", END)              # Refuse → end
+    graph_builder.add_edge("rag_retrieve", "agent")      # RAG → agent
+    graph_builder.add_edge("safety_refuse", END)          # Refuse → end
 
     # ★ Conditional edge: agent → tools or END (the core of the ReAct loop)
     graph_builder.add_conditional_edges(
@@ -377,7 +429,7 @@ room_service_graph = build_graph().compile(checkpointer=agent_memory)
 # compile() = "compile" the graph into an executable state
 # checkpointer=agent_memory = auto-save/restore conversation history per session
 
-logger.info("Agent graph compiled (ReAct: guardrail → RAG → agent ⇄ tools)")
+logger.info("Agent graph compiled (LLM Safety → RAG → agent ⇄ tools)")
 
 
 # ============================================================
