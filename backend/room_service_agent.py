@@ -1,14 +1,14 @@
 """
 Hotel Room Service Agent — ReAct Pattern
 ==============================================
-Architecture: LangGraph (LLM Safety Check + RAG + Agent ⇄ Tools)
+Architecture: LangGraph (Safety Check → Logic Check → RAG → Agent ⇄ Tools)
 
 Agent Pattern: LLM-driven autonomous decisions — the LLM makes ALL decisions
-  - LLM is the brain: safety judgment, intent understanding, tool selection, response wording
+  - LLM is the brain: safety, logic/reasonableness, intent, tool selection, response wording
   - Tools are the hands: 8 mock tool functions, return structured data for the LLM to phrase
-  - Code only does: orchestration + routing; NO hardcoded decisions
+  - Code only does: orchestration + routing; NO hardcoded decisions or templates
 
-ReAct Loop: Safety Check → RAG → Thought → Action → Observation → ... → Final Answer
+ReAct Loop: Safety → Logic → RAG → Thought → Action → Observation → ... → Final Answer
 """
 
 # ============================================================
@@ -60,10 +60,12 @@ logger = logging.getLogger("RoomServiceAgent")                   # Create a dedi
 # State persists throughout the entire conversation, like a scratchpad carried across the whole workflow.
 
 class State(TypedDict):
-    """Agent internal state — only 3 fields"""
+    """Agent internal state — 5 fields"""
     messages: Annotated[list, add_messages]   # Conversation history (user msgs + AI replies + tool call results)
     context: str                               # RAG-retrieved knowledge text
-    is_safe: str                               # Guardrail result: "SAFE" or "UNSAFE"
+    is_safe: str                               # Safety check result: "SAFE" or "UNSAFE"
+    logic_result: str                          # Logic check result: "valid" / "invalid" / "partial"
+    logic_note: str                            # LLM's analysis note (used for partial case — hints what's valid/invalid)
 
 
 # ============================================================
@@ -247,10 +249,10 @@ def safety_check_node(state: State) -> dict:
 def check_safety(state: State) -> str:
     """
     Decide next step based on LLM's safety judgment:
-      SAFE   → "retrieve" (proceed to RAG retrieval)
-      UNSAFE → "refuse"  (LLM generates polite refusal)
+      SAFE   → "logic"    (proceed to logic/reasonableness check)
+      UNSAFE → "refuse"   (LLM generates polite refusal)
     """
-    return "refuse" if state["is_safe"] == "UNSAFE" else "retrieve"
+    return "refuse" if state["is_safe"] == "UNSAFE" else "logic"
 
 
 # --- Node 2: LLM-generated Refusal ---
@@ -279,6 +281,125 @@ def safety_refuse_node(state: State) -> dict:
 
     response = safety_llm.invoke(messages)
     logger.info("LLM generated refusal: %s", (response.content or "")[:80])
+    return {"messages": [response]}
+
+
+# --- Logic Check System Prompt (LLM judges content reasonableness) ---
+LOGIC_CHECK_PROMPT = """你是一个酒店客房服务系统的逻辑检查员。客人消息已经通过安全审查，现在你需要判断消息内容在酒店客房服务的上下文中是否逻辑合理。
+
+判断标准（三选一）：
+
+1. "valid" — 消息完全合理：
+   - 内容在客房服务范围内（物品补给、清洁、维修、洗衣、叫醒、呼叫前台）
+   - 语义清晰、逻辑通顺
+   - 示例："302送两瓶水""505空调不制冷了""帮我设一个早上7点的闹钟""我有一件西装要干洗"
+
+2. "invalid" — 消息完全不合理：
+   - 内容与酒店客房服务完全无关，且没有合理部分
+   - 语义混乱、无法理解
+   - 示例："帮我把房间变成游泳池""我要去月球""告诉我宇宙的终极答案""明天股市会涨吗"
+
+3. "partial" — 消息部分合理、部分不合理：
+   - 有半句话在服务范围内且逻辑正确，另外半句话不在范围或逻辑有问题
+   - 示例：
+     "302送两瓶水，顺便帮我把空调调到20度" → 送水合理，调空调不在范围
+     "帮我打扫房间，然后告诉我明天天气怎么样" → 打扫合理，天气不在范围
+     "505的灯坏了，还有你们酒店什么时候上市的" → 报修合理，上市问题不在范围
+
+请只回复一个词："valid"、"invalid" 或 "partial"。
+如果是 "partial"，在后面简要说明哪些内容合理、哪些不合理（用中文，一行即可）。
+如果是 "invalid"，在后面简要说明为什么不合理。
+不要回复其他内容。"""
+
+
+# --- Node 2.5: LLM Logic/Reasonableness Check ---
+def logic_check_node(state: State) -> dict:
+    """
+    ★ LLM 自己判断消息是否逻辑合理 —— 完全替代硬编码判断。
+
+    三种结果：
+      - valid:   消息完全合理，继续正常流程
+      - invalid: 消息完全不合理，LLM生成引导回复
+      - partial: 部分合理，先处理正确部分再引导纠正错误部分
+
+    Input:  state["messages"][-1] (guest's latest message)
+    Output: {"logic_result": "valid"|"invalid"|"partial", "logic_note": "LLM的分析说明"}
+    """
+    last_message = state["messages"][-1].content
+
+    messages = [
+        SystemMessage(content=LOGIC_CHECK_PROMPT),
+        HumanMessage(content=f"请检查以下消息的逻辑合理性：\n{last_message}")
+    ]
+
+    response = safety_llm.invoke(messages)
+    content = response.content.strip()
+
+    # Parse LLM response: first word determines the result
+    first_line = content.split('\n')[0].strip().lower()
+    if "invalid" in first_line:
+        logic_result = "invalid"
+    elif "partial" in first_line:
+        logic_result = "partial"
+    else:
+        logic_result = "valid"
+
+    logger.info("LLM Logic Check: %s (analysis: %s)", logic_result, content[:100])
+    return {
+        "logic_result": logic_result,
+        "logic_note": content,  # Full LLM analysis, used as context for partial case
+    }
+
+
+# --- Router A2: logic → where? ---
+def check_logic(state: State) -> str:
+    """
+    Decide next step based on LLM's logic judgment:
+      valid    → "retrieve" (proceed to RAG → Agent → Tools)
+      invalid  → "guide"    (LLM guides guest to rephrase correctly)
+      partial  → "retrieve" (proceed to Agent — Agent handles valid part + guides on invalid part)
+    """
+    result = state.get("logic_result", "valid")
+    if result == "invalid":
+        return "guide"
+    else:
+        # Both "valid" and "partial" proceed to RAG → Agent
+        # For "partial", the Agent (with system prompt) handles both parts naturally
+        return "retrieve"
+
+
+# --- Node 2.6: LLM-generated Logic Guidance (for completely invalid messages) ---
+def logic_guide_node(state: State) -> dict:
+    """
+    ★ LLM 生成引导回复 —— 帮助客人说出正确的需求，不是拒绝。
+
+    与 safety_refuse 不同：logic_guide 是引导而非拒绝。
+    客人可能只是表达不清楚或误解了服务范围，LLM 温和地引导客人重新表达。
+
+    完全不用硬编码话术 —— LLM 根据具体消息内容生成个性化引导。
+    """
+    last_message = state["messages"][-1].content
+    logic_note = state.get("logic_note", "")
+
+    guide_prompt = f"""客人发送了以下消息：
+"{last_message}"
+
+逻辑检查分析：{logic_note}
+
+这条消息在酒店客房服务的上下文中不太合理。请以酒店客房服务管家的身份，温和地引导客人：
+- 不要直接说"你的问题不合理"，而是友好地告诉客人你能帮他做什么
+- 简要列举你能提供的服务（物品补给、清洁打扫、报修维护、洗衣服务、叫醒服务、呼叫前台）
+- 引导客人重新描述他的需求
+- 语气要温暖、耐心，像真正的管家在帮助客人理清思路
+- 用中文回复，2-3句话即可"""
+
+    messages = [
+        SystemMessage(content=guide_prompt),
+        HumanMessage(content="请生成一段引导回复。")
+    ]
+
+    response = safety_llm.invoke(messages)
+    logger.info("LLM generated logic guide: %s", (response.content or "")[:80])
     return {"messages": [response]}
 
 
@@ -321,6 +442,17 @@ def agent_node(state: State) -> dict:
     """
     # Build System Prompt (template + RAG knowledge)
     sys_prompt = build_system_prompt(state.get("context", ""))
+
+    # For "partial" logic result: prepend a hint so the Agent knows to handle both parts
+    logic_note = state.get("logic_note", "")
+    if state.get("logic_result") == "partial" and logic_note:
+        sys_prompt += (
+            f"\n\n【重要提示：客人消息包含混合内容】\n"
+            f"逻辑检查分析：{logic_note}\n"
+            f"请先处理消息中合理、在服务范围内的部分（调用对应工具），"
+            f"然后温和地引导客人纠正不合理或不在服务范围内的部分。"
+            f"两个部分都要回复，先处理正确的，再引导错误的。"
+        )
 
     # Build message list: [SystemMessage, ...history...]
     # [X] + [A, B, C] = [X, A, B, C] — Python list concatenation
@@ -374,6 +506,10 @@ def build_graph():
           │
           │(SAFE)
           ▼
+    logic_check ──(invalid)──► logic_guide ──► END
+          │
+          │(valid/partial)
+          ▼
       rag_retrieve
           │
           ▼
@@ -383,7 +519,7 @@ def build_graph():
           │                │
           └── tool_call → tools ──┘ (back to agent)
 
-    All decisions (safety, intent, tool selection, response wording) are made by the LLM.
+    All decisions (safety, logic, intent, tool selection, response wording) made by LLM.
     Code only does orchestration + routing.
     """
     graph_builder = StateGraph(State)          # StateGraph is the core class of LangGraph
@@ -391,6 +527,8 @@ def build_graph():
     # --- Register nodes: give each function a name ---
     graph_builder.add_node("safety_check", safety_check_node)
     graph_builder.add_node("safety_refuse", safety_refuse_node)
+    graph_builder.add_node("logic_check", logic_check_node)
+    graph_builder.add_node("logic_guide", logic_guide_node)
     graph_builder.add_node("rag_retrieve", rag_node)
     graph_builder.add_node("agent", agent_node)
     # ToolNode is a LangGraph built-in: auto-executes the Python function for each tool_call
@@ -401,15 +539,22 @@ def build_graph():
     # Fixed edge: START → safety_check (unconditional)
     graph_builder.add_edge(START, "safety_check")
 
-    # Conditional edge: safety_check → safety_refuse or rag_retrieve (depends on LLM's safety judgment)
+    # Conditional edge: safety_check → safety_refuse or logic_check
     graph_builder.add_conditional_edges(
         "safety_check", check_safety,
-        {"refuse": "safety_refuse", "retrieve": "rag_retrieve"}
+        {"refuse": "safety_refuse", "logic": "logic_check"}
+    )
+
+    # Conditional edge: logic_check → logic_guide or rag_retrieve
+    graph_builder.add_conditional_edges(
+        "logic_check", check_logic,
+        {"guide": "logic_guide", "retrieve": "rag_retrieve"}
     )
 
     # Fixed edges
-    graph_builder.add_edge("rag_retrieve", "agent")      # RAG → agent
-    graph_builder.add_edge("safety_refuse", END)          # Refuse → end
+    graph_builder.add_edge("rag_retrieve", "agent")       # RAG → agent
+    graph_builder.add_edge("safety_refuse", END)           # Safety refuse → end
+    graph_builder.add_edge("logic_guide", END)             # Logic guide → end
 
     # ★ Conditional edge: agent → tools or END (the core of the ReAct loop)
     graph_builder.add_conditional_edges(
@@ -429,7 +574,7 @@ room_service_graph = build_graph().compile(checkpointer=agent_memory)
 # compile() = "compile" the graph into an executable state
 # checkpointer=agent_memory = auto-save/restore conversation history per session
 
-logger.info("Agent graph compiled (LLM Safety → RAG → agent ⇄ tools)")
+logger.info("Agent graph compiled (Safety → Logic → RAG → agent ⇄ tools)")
 
 
 # ============================================================
