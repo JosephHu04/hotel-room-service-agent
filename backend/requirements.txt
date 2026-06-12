@@ -1,0 +1,22 @@
+# Ollama 本地模型运行
+ollama
+
+# LangChain 全家桶
+langchain
+langchain-core
+langchain-community
+langchain-ollama
+langchain-chroma
+langgraph
+
+# Embedding & 向量数据库
+sentence-transformers
+langchain-huggingface
+
+# Web 框架
+fastapi
+uvicorn
+
+# 开发/测试界面
+gradio
+gradio-client

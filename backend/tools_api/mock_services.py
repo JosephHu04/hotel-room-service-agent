@@ -1,12 +1,12 @@
 """
-酒店客房服务 Tool 函数集 (Function Calling)
+Hotel Room Service Tool Functions (Function Calling)
 ==============================================
-Day 8 改造:
-  - 全部工具返回结构化 dict（含 status / intent_id / request_type / message / trace）
-  - 新增 request_type 参数（与 BRD SL_039 枚举对齐）
-  - 新增 3 个缺失工具: call_hotel / delete_alarm / close_alarm
+Day 8 refactor:
+  - All tools return structured dict (with status / intent_id / request_type / message / trace)
+  - Added request_type parameter (aligned with BRD SL_039 enum)
+  - Added 3 missing tools: call_hotel / delete_alarm / close_alarm
 
-工具 ↔ BRD Intent 映射:
+Tool ↔ BRD Intent mapping:
   request_supplies    → SVC_ROOM_001 (ROOM_SERVICE, amenity)
   request_cleaning    → SVC_HK_001  (HOUSEKEEPING, housekeeping)
   report_maintenance  → SVC_HK_001  (HOUSEKEEPING, workorder)
@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 
 def _ok(intent_id: str, request_type: str, room_number: str,
         message: str, tool_name: str, **extra) -> dict:
-    """统一成功响应格式"""
+    """Unified success response format"""
     result = {
         "status": "success",
         "intent_id": intent_id,
@@ -39,25 +39,28 @@ def _ok(intent_id: str, request_type: str, room_number: str,
 
 
 # ============================================================
-# 服务类工具（device_type = service）
+# Service tools (device_type = service)
 # ============================================================
 
 @tool
 def request_supplies(room_number: str, item: str, quantity: int = 1,
                      request_type: str = "amenity") -> dict:
     """
-    为客人补充房间消耗品。当客人要求送毛巾、牙刷、矿泉水、拖鞋、纸巾、沐浴露等物品时使用。
+    Replenish room consumables for a guest. Use when the guest asks for towels, toothbrushes,
+    water bottles, slippers, tissues, shower gel, and similar items.
 
-    常见物品：毛巾、浴巾、牙刷、牙膏、梳子、浴帽、剃须刀、拖鞋、矿泉水、纸巾、卫生纸、沐浴露、洗发水、护发素、润肤露、香皂、被子、枕头、衣架
+    Common items: towel, bath towel, toothbrush, toothpaste, comb, shower cap, razor, slippers,
+    water bottle, tissues, toilet paper, shower gel, shampoo, conditioner, body lotion, soap,
+    blanket, pillow, hanger
 
     Args:
-        room_number: 房间号，例如 "301"
-        item: 客人需要的物品名称
-        quantity: 数量，默认1
-        request_type: 服务类型，默认 amenity（来自 BRD SL_039 枚举）
+        room_number: Room number, e.g. "301"
+        item: Name of the item the guest needs
+        quantity: Quantity, default 1
+        request_type: Service type, default amenity (from BRD SL_039 enum)
 
     Returns:
-        结构化配送确认
+        Structured delivery confirmation
     """
     return _ok(
         intent_id="SVC_ROOM_001",
@@ -74,15 +77,16 @@ def request_supplies(room_number: str, item: str, quantity: int = 1,
 def request_cleaning(room_number: str, time_preference: str = "现在",
                      request_type: str = "housekeeping") -> dict:
     """
-    为客人预约客房清洁服务。当客人要求打扫房间、做卫生、收拾房间时使用。
+    Schedule room cleaning for a guest. Use when the guest asks for room cleaning,
+    tidying up, or housekeeping.
 
     Args:
-        room_number: 房间号，例如 "301"
-        time_preference: 客人希望打扫的时间，例如 "现在"、"下午2点"
-        request_type: 服务类型，默认 housekeeping
+        room_number: Room number, e.g. "301"
+        time_preference: When the guest wants cleaning, e.g. "现在" (now), "下午2点" (2pm)
+        request_type: Service type, default housekeeping
 
     Returns:
-        结构化保洁确认
+        Structured cleaning confirmation
     """
     return _ok(
         intent_id="SVC_HK_001",
@@ -98,16 +102,18 @@ def request_cleaning(room_number: str, time_preference: str = "现在",
 def report_maintenance(room_number: str, issue: str, urgency: str = "normal",
                        request_type: str = "workorder") -> dict:
     """
-    受理客人房间设备报修。当客人反映灯泡坏了、空调不制冷/制热、马桶堵塞、WiFi连不上、电视故障、淋浴没热水等问题时使用。
+    Handle equipment maintenance reports. Use when the guest reports a broken light bulb,
+    AC not cooling/heating, clogged toilet, WiFi not connecting, TV malfunction,
+    shower no hot water, and similar issues.
 
     Args:
-        room_number: 房间号，例如 "301"
-        issue: 故障描述，例如 "空调不制冷"、"马桶堵塞"
-        urgency: 紧急程度，normal（普通）或 urgent（紧急），默认 normal
-        request_type: 服务类型，默认 workorder
+        room_number: Room number, e.g. "301"
+        issue: Fault description, e.g. "空调不制冷" (AC not cooling), "马桶堵塞" (clogged toilet)
+        urgency: Urgency level — "normal" or "urgent", default "normal"
+        request_type: Service type, default workorder
 
     Returns:
-        结构化维修工单确认
+        Structured maintenance work order confirmation
     """
     urgency_text = "紧急" if urgency == "urgent" else "普通"
     eta = "马上" if urgency == "urgent" else "2小时"
@@ -127,16 +133,17 @@ def report_maintenance(room_number: str, issue: str, urgency: str = "normal",
 def request_laundry(room_number: str, items: str, pickup_time: str = "现在",
                     request_type: str = "amenity") -> dict:
     """
-    为客人安排洗衣/干洗服务。当客人需要洗衣、干洗、熨烫服务时使用。
+    Arrange laundry / dry cleaning for a guest. Use when the guest needs laundry,
+    dry cleaning, or ironing services.
 
     Args:
-        room_number: 房间号，例如 "301"
-        items: 待洗衣物描述，例如 "两件衬衫和一条西裤"、"一套西装需要干洗"
-        pickup_time: 取衣时间，默认 "现在"
-        request_type: 服务类型，默认 amenity
+        room_number: Room number, e.g. "301"
+        items: Description of laundry items, e.g. "两件衬衫和一条西裤" (two shirts and trousers)
+        pickup_time: Pickup time, default "现在" (now)
+        request_type: Service type, default amenity
 
     Returns:
-        结构化洗衣服务确认
+        Structured laundry service confirmation
     """
     return _ok(
         intent_id="SVC_HK_001",
@@ -153,14 +160,15 @@ def request_laundry(room_number: str, items: str, pickup_time: str = "现在",
 def call_hotel(room_number: str = "",
                request_type: str = "hotel_call") -> dict:
     """
-    为客人呼叫酒店前台/转接人工服务。当客人要求叫前台、转人工、联系工作人员时使用。
+    Call the hotel front desk / transfer to human staff. Use when the guest asks
+    to reach the front desk, speak to a human, or contact staff.
 
     Args:
-        room_number: 房间号（可选），例如 "301"
-        request_type: 服务类型，默认 hotel_call
+        room_number: Room number (optional), e.g. "301"
+        request_type: Service type, default hotel_call
 
     Returns:
-        结构化呼叫确认
+        Structured call confirmation
     """
     loc = f"房间 {room_number}" if room_number else "您"
     return _ok(
@@ -173,20 +181,20 @@ def call_hotel(room_number: str = "",
 
 
 # ============================================================
-# 叫醒/闹钟类工具（device_type = alarm）
+# Wake-up / alarm tools (device_type = alarm)
 # ============================================================
 
 @tool
 def set_wake_up_call(room_number: str, time: str) -> dict:
     """
-    为客人设置叫醒/唤醒服务（Morning Call）。当客人需要设定叫醒时间时使用。
+    Set a wake-up / morning call for a guest. Use when the guest wants to set a wake-up time.
 
     Args:
-        room_number: 房间号，例如 "301"
-        time: 叫醒时间，例如 "7:00"、"早上六点半"
+        room_number: Room number, e.g. "301"
+        time: Wake-up time, e.g. "7:00", "早上六点半" (6:30am)
 
     Returns:
-        结构化唤醒服务确认
+        Structured wake-up service confirmation
     """
     return _ok(
         intent_id="ALARM_001",
@@ -201,17 +209,17 @@ def set_wake_up_call(room_number: str, time: str) -> dict:
 @tool
 def delete_alarm(label: str, room_number: str = "", alarm_id: str = "") -> dict:
     """
-    删除/取消闹钟。当客人要求取消闹钟、删除叫醒时使用。
+    Delete / cancel an alarm. Use when the guest asks to cancel an alarm or delete a wake-up call.
 
-    ⚠️ 高风险操作：必须经客人二次确认后才调用。
+    ⚠️ HIGH-RISK operation: MUST obtain explicit guest confirmation before calling.
 
     Args:
-        label: 闹钟标签/名称，例如 "起床闹钟"
-        room_number: 房间号（可选）
-        alarm_id: 闹钟ID（可选，精确删除用）
+        label: Alarm label / name, e.g. "起床闹钟" (wake-up alarm)
+        room_number: Room number (optional)
+        alarm_id: Alarm ID (optional, for precise deletion)
 
     Returns:
-        结构化删除确认
+        Structured deletion confirmation
     """
     target = f"'{label}'" if label else (f"ID={alarm_id}" if alarm_id else "指定闹钟")
     loc = f"房间 {room_number}" if room_number else "您的房间"
@@ -229,16 +237,16 @@ def delete_alarm(label: str, room_number: str = "", alarm_id: str = "") -> dict:
 @tool
 def close_alarm(room_number: str = "", label: str = "") -> dict:
     """
-    关闭正在响的闹钟。当客人要求停止闹钟、关掉响铃时使用。
+    Dismiss a ringing alarm. Use when the guest asks to stop an alarm or turn off a ringing bell.
 
-    ⚠️ 高风险操作：必须经客人二次确认后才调用。
+    ⚠️ HIGH-RISK operation: MUST obtain explicit guest confirmation before calling.
 
     Args:
-        room_number: 房间号（可选）
-        label: 闹钟标签（可选），例如 "起床闹钟"
+        room_number: Room number (optional)
+        label: Alarm label (optional), e.g. "起床闹钟" (wake-up alarm)
 
     Returns:
-        结构化关闭确认
+        Structured close confirmation
     """
     target = f"闹钟 '{label}'" if label else "闹钟"
     loc = f"房间 {room_number}" if room_number else "您的房间"
@@ -253,7 +261,7 @@ def close_alarm(room_number: str = "", label: str = "") -> dict:
 
 
 # ============================================================
-# 工具列表汇总
+# Tool list summary
 # ============================================================
 
 ALL_TOOLS = [

@@ -1,386 +1,673 @@
-# 🏨 酒店客房服务 Agent — Hotel Room Service AI Agent
+# 🏨 酒店客房服务 Agent v2
 
-<p align="center">
-  <strong>基于 LangGraph + DeepSeek 的智能客房服务对话系统</strong><br>
-  Building an AI-powered Hotel Room Service Agent with LLM + Multi-Node Pipeline
-</p>
+> **ReAct 模式智能体** — LLM 作为大脑自主决策，4 节点 LangGraph 架构
+>
+> 从 v1 的 12 节点流水线重构而来，删除 ~2,200 行规则代码，让 LLM 从"工具人"变成"决策者"。
+>
+> 🧩 **一套行业无关的 Agent 骨架** — 换掉 System Prompt 和工具函数，就能变成任何领域的智能助手。
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/LangGraph-0.2+-green.svg" alt="LangGraph">
-  <img src="https://img.shields.io/badge/LLM-DeepSeek%20Chat-purple.svg" alt="DeepSeek">
-  <img src="https://img.shields.io/badge/Framework-FastAPI-orange.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Status-Production%20Ready-brightgreen.svg" alt="Status">
-</p>
-
----
-
-## 📖 项目简介 | Overview
-
-一个面向酒店的 **AI 客房服务 Agent**，客人通过自然语言提出需求（送物品、打扫、报修、洗衣、叫醒、呼叫前台），Agent 自动理解意图、校验参数、风控确认、执行操作，并返回结构化结果。
-
-**核心能力**：理解中文口语 → 识别 6 种客房意图 → 12 节点流水线校验 → 调用 8 个工具函数 → 返回结构化 JSON
-
-### ✨ 亮点 | Highlights
-
-- 🧠 **LLM 驱动的意图理解**：DeepSeek Chat 模型，强制 JSON 结构化输出
-- 🔒 **12 节点安全流水线**：护栏 → 语言检测 → RAG → LLM → 槽位校验 → 实体解析 → 能力门控 → 风控确认 → 工具执行 → 澄清构建 → 格式化输出
-- 📋 **BRD 完整对齐**：所有规则数字化为 JSON 配置文件，与酒店 BRD 需求文档一一对应
-- 🔧 **8 个工具函数**：补给配送、清洁打扫、报修维护、洗衣服务、叫醒设置、闹钟管理、前台呼叫
-- 🧪 **18 个验收用例**：覆盖 AC1-AC5 全部验收标准
-- 🌐 **FastAPI 生产接口**：标准 RESTful API，支持多会话、结构化 JSON 响应
-
-### 🎯 适用场景 | Use Cases
-
-| 场景 | 客人说什么 | Agent 做什么 |
-|------|-----------|-------------|
-| 🧴 物品补给 | "送两瓶矿泉水到301" | 识别 ROOM_SERVICE → 校验 → 确认 → 调用 `request_supplies` |
-| 🧹 客房清洁 | "打扫一下302" | 识别 HOUSEKEEPING → 解析时间 → 安排保洁 |
-| 🔧 设备报修 | "空调不制冷了" | 识别 HOUSEKEEPING → 生成工单 → `report_maintenance` |
-| 👔 洗衣服务 | "西装需要干洗，405房" | 识别 HOUSEKEEPING → `request_laundry` |
-| ⏰ 叫醒服务 | "明早7点叫醒我，503" | 识别 ALARM → 解析时间 → `set_wake_up_call` |
-| 📞 呼叫前台 | "帮我叫前台过来" | 识别 HOTEL_CALL → 确认 → `call_hotel` |
+[![Python](https://img.shields.io/badge/Python-3.12-blue)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.2-green)](https://langchain-ai.github.io/langgraph/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688)](https://fastapi.tiangolo.com/)
+[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek%20Chat-536DFE)](https://platform.deepseek.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 ---
 
-## 🏗️ 架构设计 | Architecture
+## 📌 v1 → v2 演进
 
-### 12 节点流水线
+| 维度 | v1（旧架构） | v2（新架构） |
+|---|---|---|
+| **架构思想** | 帧基对话系统 (Frame-based DSL) | ReAct Agent (LLM 自主决策) |
+| **图节点** | 12 个（含 7 个规则代码节点） | **4 个**（Guard → RAG → Agent ⇄ Tools） |
+| **代码行数** | ~3,000 行 | ~500 行 |
+| **LLM 角色** | 只是 JSON 提取器 | **系统的决策大脑** |
+| **意图识别** | 代码硬编码映射表 | LLM 自主理解 |
+| **槽位校验** | Python 规则（~510 行） | LLM 自行判断信息完整性 |
+| **追问生成** | 模板拼接 | LLM 自然语言追问 |
+| **工具选择** | `INTENT_TOOL_MAP` 查表 | LLM 自主选择最合适的工具 |
+| **决策透明度** | 黑盒规则链 | ReAct 循环每步可追溯 |
+
+### 架构对比
 
 ```
-客人消息: "送两瓶矿泉水到301"
-    │
-    ▼ ┌─────────────────────────────────────────┐
-  ①  │ guardrail         安全护栏（关键词拦截）    │
-      └─────────────────────────────────────────┘
-    │ SAFE                              │ UNSAFE → 拒绝
-    ▼
-  ②  locale_resolver    语言检测（zh-CN/en-US/zh-GD/en-SG）
-    │
-    ▼
-  ③  rag_retrieve       RAG 知识库检索（酒店设施/服务信息）
-    │
-    ▼
-  ④  chatbot            ★ JSON 模式 LLM → {intents, slots, entities}
-    │                    使用 DeepSeek Chat，强制结构化输出
-    ▼
-  ⑤  slot_validator     槽位校验（enum/range/required/default）
-    │                    11 个槽位的合法性检查
-    ▼
-  ⑥  entity_resolver    实体解析（房间号提取 + 歧义检测）
-    │
-    ▼
-  ⑦  capability_gate    能力门控（service/alarm 设备能力矩阵）
-    │
-    ▼
-  ⑧  risk_checker       风控红线（高风险操作二次确认 + GR-01~10）
-    │
-    ▼
-      tool_executor      手动工具路由 → request_supplies(301, 矿泉水)
-    │
-    ▼
-  ⑩  response_formatter FinalOutput {result_type, intent, slots, trace}
-    │
-    ▼
-   END → 返回给客人: "好的先生，两瓶矿泉水马上送到301，大约10分钟"
+v1: START → Guard → Locale → RAG → LLM(JSON) → SlotValidate → EntityResolve
+           → CapabilityGate → RiskCheck → ToolExecute → ClarifyBuild
+           → ResponseFormat → END
+           （LLM 只是中间一个节点）
+
+v2: START → Guard → RAG → Agent(LLM + 8 Tools) ⇄ Tools → END
+                          ↑___________________________|
+                            ReAct 自主循环
+                            （LLM 是整个系统的大脑）
 ```
 
-> 💡 **为什么是 12 个节点？** 每个节点只做一件事，职责单一，便于测试、调试和规则热更新。详见 [agent主体框架/core/README.md](agent主体框架/core/README.md)。
+### 核心理念变化
 
-### 数据流
-
-| 层 | 目录 | 职责 |
-|----|------|------|
-| 📋 配置层 | `config/` | BRD 规则 JSON 化 — 改规则只改 JSON，不改代码 |
-| 📐 模型层 | `models/` | 统一数据契约 — 3 枚举 + 5 数据类 |
-| 📝 提示词层 | `prompts/` | System Prompt — 静态模板 + 动态加载器 |
-| ⚙️ 逻辑层 | `core/` | 10 个 SOP 节点 — 每个节点只做一件事 |
-| 🔧 执行层 | `tools_api/` | 8 个工具函数 — Agent 的"手" |
-| 📚 知识层 | `knowledge/` | 酒店静态信息 — RAG 向量检索 |
+> **v1 的问题**：代码不信任 LLM，处处替 LLM 做决策。每增加一条规则就多一个盲点。
+>
+> **v2 的答案**：LLM 是大脑，代码只做两件事 — 安全底线 + 提供工具。LLM 自己理解意图、判断信息够不够、追问还是执行、选哪个工具、观察结果后决定下一步。
 
 ---
 
-## 📁 项目结构 | Project Structure
+## 🏗️ 架构
 
 ```
-hotel-agent/
-├── .gitignore                         # Git 忽略规则
-├── README.md                          # 项目总览（你在看这个）
-│
-├── agent主体框架/                      # ★ 核心代码（33 个文件）
-│   ├── room_service_agent.py          # LangGraph 图编排 — 12 节点流水线
-│   ├── main_router.py                 # 总控路由 — LLM 分类 → 5 路分发
-│   ├── server.py                      # FastAPI HTTP 服务
-│   ├── requirements.txt               # Python 依赖清单
-│   ├── .env.example                   # 环境变量模板
-│   │
-│   ├── config/                        # BRD 规则 JSON（6 个配置文件）
-│   │   ├── general.json               # 通用枚举：语言/设备/位置/范围
-│   │   ├── intent_definitions.json    # 6 条客房服务意图定义
-│   │   ├── slot_definitions.json      # 11 个槽位校验规则
-│   │   ├── capability_matrix.json     # 能力矩阵（service + alarm）
-│   │   ├── risk_control.json          # 风控红线（10 条全局红线）
-│   │   ├── lexicon.json               # 实体词表
-│   │   └── README.md                  # 配置文件详细说明
-│   │
-│   ├── core/                          # 流水线节点（10 个节点）
-│   │   ├── locale_resolver.py         # ② 语言检测（4 种语言）
-│   │   ├── slot_validator.py          # ⑤ 槽位校验（4 种校验类型）
-│   │   ├── entity_resolver.py         # ⑥ 实体解析（房间号 + 歧义）
-│   │   ├── capability_gate.py         # ⑦ 能力门控
-│   │   ├── risk_checker.py            # ⑧ 风控确认 + 二次确认
-│   │   ├── clarify_builder.py         # ⑨ 澄清追问（14 个原因码）
-│   │   ├── response_formatter.py      # ⑩ 最终输出格式化
-│   │   └── README.md                  # 节点详细说明
-│   │
-│   ├── tools_api/mock_services.py     # 8 个工具函数
-│   ├── prompts/                       # System Prompt
-│   ├── knowledge/                     # RAG 知识库
-│   ├── models/models.py               # 数据模型
-│   └── tests/test_room_service.py     # 18 个验收用例
-│
-├── ui界面文件/chat_ui.html            # 前端聊天界面
-└── demand/                            # BRD 需求文档
+┌─────────────────────────────────────────────────────┐
+│                    ReAct Agent                       │
+│                                                     │
+│  ┌──────────┐    ┌──────────┐    ┌───────────────┐  │
+│  │  Guard   │───▶│   RAG    │───▶│  Agent (LLM)  │  │
+│  │ 安全护栏  │    │ 知识检索  │    │  + 8 Tools    │  │
+│  └──────────┘    └──────────┘    └───────┬───────┘  │
+│                                          │          │
+│                             文本回复 ◄───┼──► 工具调用│
+│                                          │          │
+│                                 ┌────────▼───────┐  │
+│                                 │  Tool Executor  │  │
+│                                 │  (8 mock tools) │  │
+│                                 └────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4 个图节点
+
+| 节点 | 职责 | 谁做决策 |
+|---|---|---|
+| **Guard** | 敏感词过滤（政治/暴力/色情等），命中则直接拒绝 | 代码（安全底线） |
+| **RAG** | 从酒店知识库检索相关信息，注入 System Prompt | 代码（知识增强） |
+| **Agent** | 理解意图、判断信息完整性、决定追问/执行、选择工具、生成回复 | **LLM 自主** |
+| **Tools** | 执行 8 个客房服务工具函数，返回结果给 Agent | 代码（执行层） |
+
+---
+
+## 🔄 不只是酒店 — 一套通用的 Agent 模板
+
+**这个项目的价值远不止客房服务。** 它的核心是一套 **领域无关的 ReAct Agent 骨架**，可以快速改造成任何行业的智能助手。
+
+### 骨架 vs 皮肤
+
+```
+┌─────────────────────────────────────────────┐
+│  皮肤（你只需要改这 3 层）                      │
+│  ┌─────────────────────────────────────┐    │
+│  │  1. System Prompt   → 换角色/换规则  │    │
+│  │  2. 工具函数         → 换业务能力     │    │
+│  │  3. 知识库          → 换领域知识     │    │
+│  └─────────────────────────────────────┘    │
+│                                             │
+│  骨架（不需要动，拿来即用）                      │
+│  ┌─────────────────────────────────────┐    │
+│  │  LangGraph 图编排    → Guard → RAG   │    │
+│  │                       → Agent ⇄ Tools│    │
+│  │  ReAct 循环          → 自主决策/追问   │    │
+│  │  FastAPI 服务器      → 生产级 API     │    │
+│  │  多会话记忆          → 按用户隔离      │    │
+│  │  安全护栏            → 敏感词过滤     │    │
+│  │  Web UI              → 聊天界面      │    │
+│  └─────────────────────────────────────┘    │
+└─────────────────────────────────────────────┘
+```
+
+### 改造成其他 Agent 只需 3 步
+
+| 步骤 | 改什么 | 工作量 | 示例（→ 客服 Agent） |
+|---|---|---|---|
+| **① 换人设** | `prompts/system_prompt.txt` | 5 分钟 | "你是电商客服专员，处理退换货和物流查询…" |
+| **② 换工具** | `tools_api/mock_services.py` | 30 分钟 | `query_order()` `process_refund()` `check_logistics()` |
+| **③ 换知识** | `knowledge/placeholder_info.txt` | 5 分钟 | 商品退换政策、运费标准、售后流程 |
+
+### 什么不用动
+
+- `room_service_agent.py` — 图的编排逻辑、ReAct 循环、LLM 调用，**全部不需要改**
+- `server.py` — FastAPI 路由、CORS、健康检查，**一行不改就能用**
+- `web-ui/chat_ui.html` — 改个标题就行
+
+### 可以变成什么
+
+| 行业 | Agent 类型 | 一句话改造 |
+|---|---|---|
+| 🛒 电商 | 客服 Agent | System Prompt 换成客服人设，工具换成查单/退款/物流 |
+| 🏥 医疗 | 导诊 Agent | 工具换成科室查询/预约挂号/症状初筛，知识库放就诊指南 |
+| 🏦 金融 | 理财顾问 Agent | 工具换成账户查询/风险评估/产品推荐 |
+| 📚 教育 | 助教 Agent | 工具换成题库检索/学习进度/作业批改 |
+| 🍔 餐饮 | 点餐 Agent | 工具换成菜单查询/下单/排队取号 |
+| 🚗 出行 | 用车 Agent | 工具换成叫车/预估价格/行程规划 |
+| 📦 物流 | 快递 Agent | 工具换成查件/下单/投诉 |
+| 💼 企业 | IT 助手 Agent | 工具换成工单/权限申请/设备报修 |
+
+### 关键设计原则
+
+> **LLM 是大脑，代码只是手和脚。**
+>
+> 传统做法：每个新业务需求 → 写一堆 if-else 规则，永远追不上用户的花样提问。
+>
+> 这套框架：LLM 自己理解用户的任何说法，自己判断该调哪个工具、要不要追问。
+> 你的工作从「写规则」变成了「写 System Prompt + 写工具」。
+
+---
+
+## 🛠️ 8 个客房服务工具
+
+| 工具函数 | 用途 | 对应 BRD 意图 |
+|---|---|---|
+| `request_supplies` | 客房物品补给（毛巾、矿泉水、牙刷等） | SVC_ROOM_001 |
+| `request_cleaning` | 预约客房清洁打扫 | SVC_HK_001 |
+| `report_maintenance` | 设备故障报修（空调、马桶、WiFi 等） | SVC_HK_001 |
+| `request_laundry` | 洗衣/干洗/熨烫服务 | SVC_HK_001 |
+| `call_hotel` | 呼叫前台/转接人工服务 | SVC_CALL_001 |
+| `set_wake_up_call` | 设置叫醒/唤醒闹钟 | ALARM_001 |
+| `delete_alarm` | 删除/取消闹钟（需二次确认） | ALARM_002 |
+| `close_alarm` | 关闭正在响的闹钟（需二次确认） | ALARM_003 |
+
+---
+
+## 🚀 快速开始
+
+### 前置条件
+
+- Python 3.10+
+- DeepSeek API Key（[获取地址](https://platform.deepseek.com/api_keys)）
+
+### 安装 & 运行
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/your-username/hotel-agent-v2.git
+cd hotel-agent-v2
+
+# 2. 安装依赖
+cd backend
+pip install -r requirements.txt
+
+# 3. 配置 API Key
+cp .env.example .env
+# 编辑 .env，填入你的 DeepSeek API Key
+
+# 4. 启动 FastAPI 后端（生产模式）
+python server.py
+# 服务运行在 http://127.0.0.1:8000
+# API 文档: http://127.0.0.1:8000/docs
+
+# 5. 或者启动 Gradio 测试界面
+python room_service_agent.py
+# 界面运行在 http://127.0.0.1:7860
+```
+
+### 使用前端 UI
+
+用浏览器打开 `web-ui/chat_ui.html`（需先启动后端）。
+
+```bash
+# Windows
+start "" ..\web-ui\chat_ui.html
+
+# macOS
+open ../web-ui/chat_ui.html
 ```
 
 ---
 
-## 🚀 快速开始 | Quick Start
+## 📡 API 接口
 
-### 前置要求
+### `POST /api/chat` — 核心对话接口
 
-- **Python** >= 3.10
-- **DeepSeek API Key** → [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) 免费注册获取
-- （可选）Ollama 本地模型
-
-### 1. 克隆项目
-
-```bash
-git clone https://github.com/YOUR_USERNAME/hotel-agent.git
-cd hotel-agent
-```
-
-### 2. 安装依赖
-
-```bash
-pip install -r agent主体框架/requirements.txt
-```
-
-### 3. 配置 API Key
-
-```bash
-# 复制环境变量模板
-cp agent主体框架/.env.example agent主体框架/.env
-
-# 编辑 .env 文件，填入你的 DeepSeek API Key
-# 内容如下：
-```
-
-```env
-# DeepSeek API（必需，免费注册即送额度）
-DEEPSEEK_API_KEY=sk-your-deepseek-api-key-here
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-
-# 服务器配置（可选）
-SERVER_HOST=0.0.0.0
-SERVER_PORT=8000
-```
-
-### 4. 启动
-
-```bash
-# 方式一：Gradio 本地调试界面（最简单）
-python agent主体框架/room_service_agent.py
-
-# 方式二：FastAPI HTTP 服务（生产环境）
-python agent主体框架/server.py
-# 然后访问 http://localhost:8000/docs 查看 Swagger API 文档
-
-# 方式三：总控路由（多 Agent 分发）
-python agent主体框架/main_router.py
-```
-
-### 5. 测试
-
-```bash
-python agent主体框架/tests/test_room_service.py
-```
-
----
-
-## 📡 API 文档 | API Reference
-
-### 接口列表
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/chat` | 核心对话接口 |
-| `GET` | `/api/health` | 健康检查 |
-| `GET` | `/api/sessions` | 活跃会话列表 |
-| `DELETE` | `/api/sessions/{id}` | 清除会话（退房后调用） |
-
-### POST /api/chat — 对话接口
-
-**请求**：
 ```json
+// Request
 {
   "message": "送两瓶矿泉水到301",
   "session_id": "301"
 }
-```
 
-**响应**：
-```json
+// Response
 {
-  "response": "好的先生，两瓶矿泉水马上送到301房间，大约10分钟为您送达。",
-  "session_id": "301",
-  "result_type": "execute",
-  "final_intent": {
-    "L1": "ROOM_SERVICE",
-    "L2": "CREATE_REQUEST",
-    "L3": "DEFAULT",
-    "id": "SVC_ROOM_001",
-    "score": 0.95
-  },
-  "decision_trace": [
-    {"step": "guardrail", "result": "pass"},
-    {"step": "locale_resolver", "result": "pass", "locale": "zh-CN"},
-    {"step": "chatbot", "result": "pass", "intent": "ROOM_SERVICE"},
-    {"step": "slot_validator", "result": "pass", "slots_validated": 4},
-    {"step": "entity_resolver", "result": "pass", "room": "301"},
-    {"step": "capability_gate", "result": "pass"},
-    {"step": "risk_checker", "result": "pass"},
-    {"step": "tool_executor", "tool_name": "request_supplies"}
-  ],
-  "tool_calls": ["request_supplies"]
+  "response": "好的，两瓶矿泉水已经安排好了，客房服务员将在10分钟内送到301房间。",
+  "session_id": "301"
 }
 ```
 
-**三种 result_type**：
+### `GET /api/health` — 健康检查
 
-| 类型 | 含义 | 示例场景 |
-|------|------|---------|
-| `execute` | 校验通过，已执行 | "送两瓶水到301" → 成功配送 |
-| `need_clarify` | 需要追问/确认 | "打扫一下"（缺房间号）→ 追问 |
-| `reject` | 拒绝 | 政治/暴力等敏感内容 → 礼貌拒绝 |
+```json
+{
+  "status": "ok",
+  "agent": "RoomServiceAgent",
+  "model": "deepseek-chat",
+  "tools": ["request_supplies", "request_cleaning", ...]
+}
+```
 
----
-
-## 🛠️ 技术栈 | Tech Stack
-
-| 组件 | 技术选型 | 说明 |
-|------|---------|------|
-| 🧠 大模型 | DeepSeek Chat API | OpenAI 兼容接口，中文能力强，价格低廉 |
-| 🔗 对话编排 | LangGraph 0.2+ | 有向图状态机，支持条件路由和持久记忆 |
-| 🔍 向量检索 | Chroma + all-MiniLM-L6-v2 | 轻量级本地向量库，无需外部服务 |
-| 🌐 HTTP 框架 | FastAPI + Uvicorn | 高性能异步框架，自动生成 Swagger 文档 |
-| 🖥️ 调试界面 | Gradio 4.0+ | 一键启动 Web 聊天界面 |
-| 📋 数据校验 | Pydantic | 请求/响应模型自动校验 |
-| 💾 会话记忆 | LangGraph MemorySaver | 内存存储，支持按 session_id 隔离 |
+### `DELETE /api/sessions/{session_id}` — 清除会话（退房）
 
 ---
 
-## 📚 学习指南 | Learning Guide
+## 📁 项目结构
 
-如果你是第一次接触这个项目，建议按以下顺序阅读：
-
-| 顺序 | 阅读内容 | 预计时间 | 收获 |
-|------|---------|---------|------|
-| 1 | 本页面 | 5 min | 了解项目全貌和启动方式 |
-| 2 | [agent主体框架/README.md](agent主体框架/README.md) | 10 min | 理解 12 节点流水线架构 |
-| 3 | [config/README.md](agent主体框架/config/README.md) | 15 min | 学会"配置即规则"的设计思路 |
-| 4 | [models/README.md](agent主体框架/models/README.md) | 10 min | 看懂统一数据契约 |
-| 5 | [core/README.md](agent主体框架/core/README.md) | 20 min | 逐个理解 10 个流水线节点 |
-| 6 | [tools_api/README.md](agent主体框架/tools_api/README.md) | 10 min | 了解 8 个工具函数设计 |
-| 7 | [demand/BRD全表.md](demand/BRD全表.md) | 15 min | 对照需求文档验证完整性 |
-
----
-
-## 🔧 开发指南 | Development
-
-### 如何新增一个服务类型
-
-1. 在 `config/intent_definitions.json` 添加意图定义
-2. 在 `config/slot_definitions.json` 添加槽位规则
-3. 在 `tools_api/mock_services.py` 添加工具函数
-4. 在 `room_service_agent.py` 添加意图→工具映射
-
-### 如何替换为真实酒店系统
-
-当前工具函数为 Mock 实现，接入真实 PMS（Property Management System）只需：
-
-1. 修改 `tools_api/mock_services.py` 中的函数实现
-2. 将返回的 `message` 替换为真实 API 调用结果
-3. 保持函数签名和返回格式不变，上层代码无需修改
-
-### 如何切换为大模型
-
-默认使用 DeepSeek Chat。如需切换为其他模型：
-
-```python
-# 修改 room_service_agent.py 中的 llm_json 和 llm_chat
-llm_json = ChatOpenAI(
-    model="你的模型名",       # 如 gpt-4o, qwen-plus, glm-4
-    api_key="你的API Key",
-    base_url="你的Base URL", # OpenAI / 阿里云 / 智谱 等
-)
+```
+hotel-agent-v2/
+├── README.md                          ← 项目说明
+├── .gitignore
+├── .env.example
+│
+├── backend/                           ← 后端核心代码
+│   ├── room_service_agent.py          ★ Agent 主程序（ReAct 循环）
+│   ├── server.py                      ★ FastAPI 生产服务器
+│   ├── requirements.txt               Python 依赖
+│   ├── .env.example                   API Key 配置模板
+│   ├── prompts/
+│   │   └── system_prompt.txt          System Prompt（角色 + 工具指引）
+│   ├── knowledge/
+│   │   └── placeholder_info.txt       酒店知识库（RAG 检索源）
+│   └── tools_api/
+│       ├── __init__.py
+│       └── mock_services.py           8 个工具函数（mock 实现）
+│
+├── web-ui/                            ← 前端
+│   └── chat_ui.html                   纯 HTML 聊天界面
+│
+└── docs/                              ← 设计文档
+    ├── BRD_客房服务Agent提取.md        需求说明书（BRD）
+    ├── BRD全表.md                      需求全表
+    ├── README_什么是真正的Agent.md       v1→v2 的理论讨论
+    ├── README_重构方案_从流水线到Agent.md 重构设计方案
+    └── README_重构执行清单.md            重构执行记录
 ```
 
 ---
 
-## ❓ 常见问题 | FAQ
+## 🔧 技术栈
 
-<details>
-<summary><strong>Q: 为什么用 12 个节点而不是让 LLM 直接调用工具？</strong></summary>
-
-这是传统流水线架构（Frame-based Dialogue System）的做法——每个节点职责单一，可独立测试和调试。这种做法在确定性要求高的酒店场景有其合理性（如风控红线不可绕过），但也有过度工程的代价。相关讨论见 core/README.md。
-</details>
-
-<details>
-<summary><strong>Q: DeepSeek API 免费吗？</strong></summary>
-
-DeepSeek 新用户注册赠送免费额度。即使付费，价格也远低于 GPT-4（约 1/10），非常适合学习和原型开发。
-</details>
-
-<details>
-<summary><strong>Q: 能在没有网络的环境运行吗？</strong></summary>
-
-可以使用 Ollama 本地模型替代 DeepSeek API。修改 `room_service_agent.py` 中的 LLM 配置为 `ChatOllama`，并在 `requirements.txt` 中启用 `langchain-ollama`。
-</details>
-
-<details>
-<summary><strong>Q: 支持多语言吗？</strong></summary>
-
-支持普通话（zh-CN）、粤语（zh-GD）、美式英语（en-US）、新加坡英语（en-SG）四种语言，由 `locale_resolver` 节点自动检测。
-</details>
+| 组件 | 技术 | 说明 |
+|---|---|---|
+| **编排框架** | LangGraph 1.2 | 有向图编排，条件路由，ReAct 循环 |
+| **LLM** | DeepSeek Chat API | 兼容 OpenAI 格式，性价比高 |
+| **记忆** | MemorySaver | 内存会话记忆，可按 session_id 隔离 |
+| **RAG** | Chroma + all-MiniLM-L6-v2 | 轻量级向量检索，嵌入式运行 |
+| **后端** | FastAPI + Uvicorn | 异步高性能，自动生成 OpenAPI 文档 |
+| **前端** | HTML + Tailwind CSS + Vanilla JS | 零构建，浏览器直接打开 |
+| **测试界面** | Gradio 6.x | 本地快速测试对话 |
 
 ---
 
-## 🤝 贡献 | Contributing
+## 🎯 对话示例
 
-欢迎提交 Issue 和 Pull Request！
+```
+用户: 送两瓶矿泉水和一条毛巾到301
+Agent: 🧠 决定调用 request_supplies(room="301", item="矿泉水", qty=2) + request_supplies(room="301", item="毛巾")
+       好的，矿泉水两瓶和毛巾一条马上送到301，大约十分钟就到。
 
-- 🐛 发现 Bug → 提交 Issue，附上复现步骤
-- 💡 功能建议 → 提交 Issue，描述使用场景
-- 🔧 代码贡献 → Fork → 新分支 → PR
+用户: 302的空调不制冷了，快来看看
+Agent: 🧠 决定调用 report_maintenance(room="302", issue="空调不制冷", urgency="urgent")
+       已经记录下来了，302房间的空调不制冷问题，维修师傅优先处理，马上到。
 
----
+用户: 帮我预约明早7点的叫醒服务，房间503
+Agent: 🧠 决定调用 set_wake_up_call(room="503", time="7:00")
+       已为房间503设置唤醒服务，时间：明早7:00。届时电话将自动振铃。
 
-## 📄 许可证 | License
-
-MIT License — 详见 [LICENSE](LICENSE) 文件（如有）。
-
----
-
-## 🔗 相关链接 | Links
-
-- [DeepSeek 开放平台](https://platform.deepseek.com) — 获取 API Key
-- [LangGraph 文档](https://langchain-ai.github.io/langgraph/) — 对话图编排框架
-- [FastAPI 文档](https://fastapi.tiangolo.com/) — HTTP 框架
-- [Gradio 文档](https://www.gradio.app/) — 交互界面框架
+用户: 帮我写一首诗
+Agent: 🧠 非酒店话题 → 直接回复，不调工具
+       抱歉先生/女士，我是您的酒店专属管家，仅为您解答酒店相关服务，写诗我帮不上忙呢。如果有其他需要，随时叫我。
+```
 
 ---
 
-<p align="center">
-  <sub>Built with ❤️ for the hospitality industry | 为酒店行业而建</sub>
-</p>
+## ⚠️ 注意事项
+
+- **API Key 安全**：`.env` 文件已在 `.gitignore` 中排除。请使用 `.env.example` 作为模板创建自己的 `.env`，**切勿将真实 API Key 提交到代码仓库**。
+- **Mock 工具**：当前工具函数返回模拟数据，生产环境需对接真实的酒店 PMS 系统。
+- **HuggingFace 模型**：首次运行会自动下载 `all-MiniLM-L6-v2` 嵌入模型（~90MB），需联网。模型会被缓存到本地。
+- **MemorySaver**：会话记忆存储在内存中，服务重启后清空。生产环境可升级为 `SqliteSaver` 做持久化。
+
+---
+
+## 📄 License
+
+MIT License
+
+---
+
+*Built with LangGraph · DeepSeek · FastAPI · Gradio*
+
+---
+
+> ————
+
+# 🏨 Hotel Room Service Agent v2
+
+> **ReAct Agent Pattern** — LLM as the autonomous brain, 4-node LangGraph architecture
+>
+> Refactored from a v1 12-node pipeline, removing ~2,200 lines of rule code. The LLM goes from being a "tool" to being the "decision-maker".
+>
+> 🧩 **An industry-agnostic Agent skeleton** — swap the System Prompt and tool functions to turn it into an intelligent assistant for any domain.
+
+[![Python](https://img.shields.io/badge/Python-3.12-blue)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.2-green)](https://langchain-ai.github.io/langgraph/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688)](https://fastapi.tiangolo.com/)
+[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek%20Chat-536DFE)](https://platform.deepseek.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+---
+
+## 📌 v1 → v2 Evolution
+
+| Dimension | v1 (Old Architecture) | v2 (New Architecture) |
+|---|---|---|
+| **Paradigm** | Frame-based Dialogue System | ReAct Agent (LLM-driven decisions) |
+| **Graph Nodes** | 12 (7 are rule-code nodes) | **4** (Guard → RAG → Agent ⇄ Tools) |
+| **Code Size** | ~3,000 lines | ~500 lines |
+| **LLM's Role** | Just a JSON extractor | **The brain of the system** |
+| **Intent Recognition** | Hard-coded mapping tables | LLM understands naturally |
+| **Slot Validation** | Python rules (~510 lines) | LLM judges completeness itself |
+| **Clarification** | Template-based | LLM generates natural follow-ups |
+| **Tool Selection** | `INTENT_TOOL_MAP` lookup table | LLM autonomously picks the right tool |
+| **Traceability** | Opaque rule chain | Every ReAct step is traceable |
+
+### Architecture Comparison
+
+```
+v1: START → Guard → Locale → RAG → LLM(JSON) → SlotValidate → EntityResolve
+           → CapabilityGate → RiskCheck → ToolExecute → ClarifyBuild
+           → ResponseFormat → END
+           (LLM is just one node in the chain)
+
+v2: START → Guard → RAG → Agent(LLM + 8 Tools) ⇄ Tools → END
+                          ↑___________________________|
+                            ReAct autonomous loop
+                            (LLM is the brain of the system)
+```
+
+### Core Philosophy Shift
+
+> **v1's problem**: The code didn't trust the LLM, making every decision on its behalf. Every rule added was another blind spot.
+>
+> **v2's answer**: The LLM is the brain. The code only does two things — safety guardrails + providing tools. The LLM understands intent, judges whether it has enough information, decides to clarify or execute, picks the right tool, observes the result, and decides the next step — all by itself.
+
+---
+
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    ReAct Agent                       │
+│                                                     │
+│  ┌──────────┐    ┌──────────┐    ┌───────────────┐  │
+│  │  Guard   │───▶│   RAG    │───▶│  Agent (LLM)  │  │
+│  │  Safety  │    │Knowledge │    │  + 8 Tools    │  │
+│  └──────────┘    └──────────┘    └───────┬───────┘  │
+│                                          │          │
+│                           Text reply ◄───┼──► Tool call│
+│                                          │          │
+│                                 ┌────────▼───────┐  │
+│                                 │  Tool Executor  │  │
+│                                 │  (8 mock tools) │  │
+│                                 └────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4 Graph Nodes
+
+| Node | Responsibility | Who Decides |
+|---|---|---|
+| **Guard** | Filters sensitive content (politics/violence/NSFW), rejects if hit | Code (safety baseline) |
+| **RAG** | Retrieves relevant knowledge from the hotel KB, injects into System Prompt | Code (knowledge augmentation) |
+| **Agent** | Understands intent, judges info completeness, decides clarify/execute, picks tools, generates replies | **LLM autonomously** |
+| **Tools** | Executes 8 room service tool functions, returns results to Agent | Code (execution layer) |
+
+---
+
+## 🔄 Not Just a Hotel — A Universal Agent Template
+
+**This project's value goes far beyond room service.** At its core is a **domain-agnostic ReAct Agent skeleton** that can be rapidly adapted into an intelligent assistant for any industry.
+
+### Skeleton vs. Skin
+
+```
+┌─────────────────────────────────────────────┐
+│  SKIN (only 3 layers to customize)           │
+│  ┌─────────────────────────────────────┐    │
+│  │  1. System Prompt   → Swap role/rules│   │
+│  │  2. Tool functions   → Swap business │   │
+│  │  3. Knowledge base   → Swap domain   │   │
+│  └─────────────────────────────────────┘    │
+│                                             │
+│  SKELETON (ready to use, no changes needed)  │
+│  ┌─────────────────────────────────────┐    │
+│  │  LangGraph orchestration → Guard→RAG│    │
+│  │                      → Agent⇄Tools   │    │
+│  │  ReAct loop           → Auto-decide  │    │
+│  │  FastAPI server       → Production API│   │
+│  │  Multi-session memory → Per-user iso  │    │
+│  │  Content safety       → Keyword filter│    │
+│  │  Web UI               → Chat interface│    │
+│  └─────────────────────────────────────┘    │
+└─────────────────────────────────────────────┘
+```
+
+### 3 Steps to Build a New Agent
+
+| Step | What to Change | Effort | Example (→ Customer Service Agent) |
+|---|---|---|---|
+| **① Persona** | `prompts/system_prompt.txt` | 5 min | "You are an e-commerce support specialist handling returns and shipping inquiries…" |
+| **② Tools** | `tools_api/mock_services.py` | 30 min | `query_order()` `process_refund()` `check_logistics()` |
+| **③ Knowledge** | `knowledge/placeholder_info.txt` | 5 min | Return policies, shipping rates, after-sales procedures |
+
+### What You Don't Touch
+
+- `room_service_agent.py` — Graph orchestration, ReAct loop, LLM invocation — **zero changes needed**
+- `server.py` — FastAPI routes, CORS, health checks — **works out of the box**
+- `web-ui/chat_ui.html` — just change the title
+
+### What It Can Become
+
+| Industry | Agent Type | In a Nutshell |
+|---|---|---|
+| 🛒 E-Commerce | Customer Service Agent | Tools for order lookup, refunds, logistics tracking |
+| 🏥 Healthcare | Triage Agent | Tools for department lookup, appointment booking, symptom screening |
+| 🏦 Finance | Advisory Agent | Tools for account inquiry, risk assessment, product recommendations |
+| 📚 Education | Teaching Assistant | Tools for quiz retrieval, progress tracking, assignment grading |
+| 🍔 Food & Beverage | Ordering Agent | Tools for menu browsing, ordering, queue management |
+| 🚗 Mobility | Ride-Hailing Agent | Tools for booking, fare estimation, trip planning |
+| 📦 Logistics | Parcel Agent | Tools for tracking, shipping, complaints |
+| 💼 Enterprise | IT Helpdesk Agent | Tools for tickets, permissions, device repair |
+
+### Key Design Principle
+
+> **The LLM is the brain. Code is just the hands and feet.**
+>
+> Traditional approach: every new business requirement → a pile of if-else rules, forever chasing the endless variety of user queries.
+>
+> This framework: the LLM understands any phrasing a user might throw at it, decides which tool to call, and whether to ask for clarification — all by itself.
+> Your job shifts from "writing rules" to "writing System Prompts + writing tools".
+
+---
+
+## 🛠️ 8 Room Service Tools
+
+| Tool Function | Purpose | BRD Intent |
+|---|---|---|
+| `request_supplies` | Deliver amenities (towels, water, toothbrushes, etc.) | SVC_ROOM_001 |
+| `request_cleaning` | Schedule housekeeping | SVC_HK_001 |
+| `report_maintenance` | Report equipment issues (AC, toilet, WiFi, etc.) | SVC_HK_001 |
+| `request_laundry` | Laundry / dry cleaning / ironing | SVC_HK_001 |
+| `call_hotel` | Transfer to front desk / human staff | SVC_CALL_001 |
+| `set_wake_up_call` | Set wake-up / morning call alarm | ALARM_001 |
+| `delete_alarm` | Delete/cancel alarm (requires confirmation) | ALARM_002 |
+| `close_alarm` | Dismiss a ringing alarm (requires confirmation) | ALARM_003 |
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- DeepSeek API Key ([Get one here](https://platform.deepseek.com/api_keys))
+- *(Optional — to use OpenAI instead, just change `base_url` and `model` in `room_service_agent.py`)*
+
+### Install & Run
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/your-username/hotel-agent-v2.git
+cd hotel-agent-v2
+
+# 2. Install dependencies
+cd backend
+pip install -r requirements.txt
+
+# 3. Configure API Key
+cp .env.example .env
+# Edit .env and paste your DeepSeek API Key
+
+# 4. Start FastAPI backend (production mode)
+python server.py
+# Server runs at http://127.0.0.1:8000
+# API docs: http://127.0.0.1:8000/docs
+
+# 5. Or launch Gradio test UI
+python room_service_agent.py
+# UI runs at http://127.0.0.1:7860
+```
+
+### Using the Web UI
+
+Open `web-ui/chat_ui.html` in your browser (backend must be running first).
+
+```bash
+# Windows
+start "" ..\web-ui\chat_ui.html
+
+# macOS
+open ../web-ui/chat_ui.html
+
+# Linux
+xdg-open ../web-ui/chat_ui.html
+```
+
+---
+
+## 📡 API Reference
+
+### `POST /api/chat` — Core Chat Endpoint
+
+```json
+// Request
+{
+  "message": "Send two bottles of water to room 301",
+  "session_id": "301"
+}
+
+// Response
+{
+  "response": "Sure, two bottles of water will be delivered to room 301 within 10 minutes.",
+  "session_id": "301"
+}
+```
+
+### `GET /api/health` — Health Check
+
+```json
+{
+  "status": "ok",
+  "agent": "RoomServiceAgent",
+  "model": "deepseek-chat",
+  "tools": ["request_supplies", "request_cleaning", ...]
+}
+```
+
+### `DELETE /api/sessions/{session_id}` — Clear Session (check-out)
+
+---
+
+## 📁 Project Structure
+
+```
+hotel-agent-v2/
+├── README.md                          ← You are here (CN + EN)
+├── .gitignore
+├── .env.example
+│
+├── backend/                           ← Core backend
+│   ├── room_service_agent.py          ★ Agent main program (ReAct loop)
+│   ├── server.py                      ★ FastAPI production server
+│   ├── requirements.txt               Python dependencies
+│   ├── .env.example                   API key config template
+│   ├── prompts/
+│   │   └── system_prompt.txt          System Prompt (role + tool guidance)
+│   ├── knowledge/
+│   │   └── placeholder_info.txt       Hotel knowledge base (RAG source)
+│   └── tools_api/
+│       ├── __init__.py
+│       └── mock_services.py           8 tool functions (mock implementation)
+│
+├── web-ui/                            ← Frontend
+│   └── chat_ui.html                   Zero-build HTML chat interface
+│
+└── docs/                              ← Design documents (Chinese)
+    ├── BRD_requirements.md             BRD extracted for room service
+    ├── BRD_full_table.md               Full BRD table
+    ├── what-is-an-agent.md            v1→v2 theoretical discussion
+    ├── refactor-plan.md               Refactoring design plan
+    └── refactor-checklist.md          Refactoring execution log
+```
+
+---
+
+## 🔧 Tech Stack
+
+| Component | Technology | Notes |
+|---|---|---|
+| **Orchestration** | LangGraph 1.2 | Directed graph, conditional routing, ReAct loop |
+| **LLM** | DeepSeek Chat API | OpenAI-compatible format, cost-effective |
+| **Memory** | MemorySaver | In-memory sessions, isolated by session_id |
+| **RAG** | Chroma + all-MiniLM-L6-v2 | Lightweight vector search, embedded mode |
+| **Backend** | FastAPI + Uvicorn | Async, auto-generated OpenAPI docs |
+| **Frontend** | HTML + Tailwind CSS + Vanilla JS | Zero build, open in browser |
+| **Test UI** | Gradio 6.x | Quick local chat testing |
+
+---
+
+## 🎯 Conversation Examples
+
+```
+Guest: Send two bottles of water and a towel to 301
+Agent: 🧠 Decides to call request_supplies(room="301", item="water", qty=2)
+          + request_supplies(room="301", item="towel")
+       Sure, two bottles of water and a towel will be delivered to room 301
+       right away, about 10 minutes.
+
+Guest: The AC in 302 isn't cooling, come fix it now!
+Agent: 🧠 Decides to call report_maintenance(room="302", issue="AC not cooling", urgency="urgent")
+       I've logged this — room 302 AC issue. A technician will be dispatched
+       immediately as a priority.
+
+Guest: Set a wake-up call for 7am tomorrow, room 503
+Agent: 🧠 Decides to call set_wake_up_call(room="503", time="7:00")
+       Wake-up call set for room 503 at 7:00 AM tomorrow.
+       The phone will ring automatically at that time.
+
+Guest: Write me a poem
+Agent: 🧠 Out of scope → replies directly, no tool call
+       I'm sorry, I'm your hotel service assistant and can only help with
+       hotel-related requests. Is there anything else I can assist you with?
+```
+
+---
+
+## ⚠️ Important Notes
+
+- **API Key Security**: `.env` is excluded via `.gitignore`. Use `.env.example` as a template — **never commit your real API key**.
+- **Mock Tools**: Tool functions currently return simulated data. For production, connect to your real business systems (PMS, CRM, etc.).
+- **HuggingFace Model**: The `all-MiniLM-L6-v2` embedding model (~90MB) is downloaded automatically on first run. It's cached locally afterwards.
+- **LLM Provider**: Defaults to DeepSeek. To use OpenAI, change `base_url` to `https://api.openai.com/v1` and `model` to `gpt-4o` in `room_service_agent.py` — everything else stays the same.
+- **MemorySaver**: Conversations are stored in memory and cleared on restart. Upgrade to `SqliteSaver` for persistent storage in production.
+
+---
+
+## 📄 License
+
+MIT License
+
+---
+
+*Built with LangGraph · DeepSeek · FastAPI · Gradio*
