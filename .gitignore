@@ -1,45 +1,26 @@
-# ===== 环境变量 & 密钥 =====
-.env
-*.env
-!.env.example
-
-# ===== Python =====
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
+*.pyo
 *.egg-info/
 dist/
 build/
-*.egg
-.eggs/
 
-# ===== 虚拟环境 =====
+# 环境变量（含 API Key，不能提交）
+.env
+
+# 对话记忆（含客人隐私）
+*.db
+conversations.json
+
+# 虚拟环境
 venv/
 .venv/
-env/
-.env/
 
-# ===== IDE =====
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
-# ===== OS =====
+# 系统文件
 .DS_Store
 Thumbs.db
-Desktop.ini
-
-# ===== Chroma 向量数据库 =====
-chroma_db/
-
-# ===== 日志 =====
-*.log
-
-# ===== 大模型文件 =====
-*.bin
-*.safetensors
-*.pth
-*.onnx
