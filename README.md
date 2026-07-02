@@ -1,8 +1,8 @@
-# 🏨 酒店客房服务 Agent v3
+# 🏨 五星级酒店客房服务 AI Agent
 
 > **ReAct 模式智能体** — LLM 自主决策，本地 Ollama 运行，零外部依赖 RAG
 >
-> 从 v2 的 4 节点 DeepSeek 云 API 架构演进而来。信任 LLM 的判断力，精简工作流、去除冗余依赖、实现对话持久化。
+> 从 v1 基础框架 → v2 云端 DeepSeek → v3 本地化零成本，完整迭代历程尽在一个仓库。
 >
 > 🧩 **一套行业无关的 Agent 骨架** — 换掉 System Prompt 和工具函数，就能变成任何领域的智能助手。
 
@@ -11,6 +11,21 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688)](https://fastapi.tiangolo.com/)
 [![Ollama](https://img.shields.io/badge/LLM-Ollama%20qwen3:8b-FF6B00)](https://ollama.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+[![Version](https://img.shields.io/badge/version-v3.0.0-brightgreen)](https://github.com/JosephHu04/hotel-room-service-agent/releases)
+
+---
+
+## 📜 完整迭代历史
+
+| 版本 | 标签 | 核心变化 |
+|------|------|----------|
+| **v1.0.0** | [🔖](https://github.com/JosephHu04/hotel-room-service-agent/releases/tag/v1.0.0) | 初始框架：Agent 主体 + UI 界面 + BRD 需求文档 |
+| **v2.0.0** | [🔖](https://github.com/JosephHu04/hotel-room-service-agent/releases/tag/v2.0.0) | ReAct Agent + LangGraph 4 节点架构，LLM 驱动自主决策 |
+| **v2.1.0** | [🔖](https://github.com/JosephHu04/hotel-room-service-agent/releases/tag/v2.1.0) | LLM 自主决策：移除硬编码安全检查与工具话术模板 |
+| **v2.2.0** | [🔖](https://github.com/JosephHu04/hotel-room-service-agent/releases/tag/v2.2.0) | 新增 LLM 逻辑合理性检查：安全检测后、RAG 前多一层把关 |
+| **v3.0.0** | [🔖](https://github.com/JosephHu04/hotel-room-service-agent/releases/tag/v3.0.0) | 本地 Ollama + TF-IDF RAG + JSON 持久化，架构 4→2 节点 |
+
+> 💡 点击 🔖 跳转到对应版本的详细 Release Notes。完整 commit 历史见 [GitHub Commits](https://github.com/JosephHu04/hotel-room-service-agent/commits/master)。
 
 ---
 
